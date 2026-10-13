@@ -3,8 +3,10 @@ import SwiftUI
 
 /// Sizes measured on the reference screenshot (2x image, values in points).
 enum Layout {
-    static let expandedBodyWidth: CGFloat = 680   // 22 + 3×176 + 84 + 3×8 + 22
-    static let expandedExtraHeight: CGFloat = 168 // below the notch band
+    static let expandedBodyWidth: CGFloat = 680   // 22 + 3×176 + 84 + 3×8 + 22 (all tiles)
+    static let tilesBlockHeight: CGFloat = 132    // 18 + 96 + 18, below the notch band
+    static let lyricsHeight: CGFloat = 54         // replaces the 18 pt bottom margin
+    static var expandedExtraHeight: CGFloat { tilesBlockHeight - 18 + lyricsHeight }
     static let outerPadding: CGFloat = 22
     static let tileGap: CGFloat = 8
     static let tileTopGap: CGFloat = 18
@@ -78,6 +80,9 @@ final class IslandModel: ObservableObject {
     @Published var geometry: NotchGeometry
     /// Something wants the compact pill (e.g. Claude Code is working).
     @Published var compactActive = false { didSet { update() } }
+    /// Set from the visible tiles and the music state.
+    @Published var expandedBodyWidth: CGFloat = Layout.expandedBodyWidth
+    @Published var showsLyrics = false
 
     private(set) var pinned = false
     private var hovering = false
@@ -121,7 +126,8 @@ final class IslandModel: ObservableObject {
             return CGSize(width: max(n.width + 2 * Layout.compactSide, Layout.peekMinWidth) + ears,
                           height: n.height + Layout.peekExtraHeight)
         case .expanded:
-            return CGSize(width: Layout.expandedBodyWidth + ears, height: n.height + Layout.expandedExtraHeight)
+            let height = showsLyrics ? Layout.expandedExtraHeight : Layout.tilesBlockHeight
+            return CGSize(width: expandedBodyWidth + ears, height: n.height + height)
         }
     }
 

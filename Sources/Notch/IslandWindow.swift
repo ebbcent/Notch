@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 /// Borderless, transparent panel over the notch. Never takes focus.
 final class IslandPanel: NSPanel {
@@ -48,14 +49,29 @@ final class IslandController {
     private let tracker: MouseTracker
     private var monitors: [Any] = []
     private var observers: [NSObjectProtocol] = []
+    private var cancellables: Set<AnyCancellable> = []
+    private let settings: Settings
+    private let music: MusicService
+    private let weather: WeatherService
+    private let calendar: CalendarService
 
-    init(settings: Settings) {
+    init(settings: Settings, music: MusicService, weather: WeatherService,
+         calendar: CalendarService, timer: FocusTimer) {
+        self.settings = settings
+        self.music = music
+        self.weather = weather
+        self.calendar = calendar
         panel = IslandPanel.make()
         tracker = MouseTracker()
         let screen = NotchGeometry.preferredScreen()
         model = IslandModel(geometry: screen.map { NotchGeometry(screen: $0) } ?? .fallback)
 
-        let hosting = IslandHostingView(rootView: IslandView(model: model, settings: settings))
+        let root = IslandView(model: model, settings: settings)
+            .environmentObject(music)
+            .environmentObject(weather)
+            .environmentObject(calendar)
+            .environmentObject(timer)
+        let hosting = IslandHostingView(rootView: AnyView(root))
         hosting.sizingOptions = []
         panel.contentView = hosting
 
@@ -71,6 +87,38 @@ final class IslandController {
         reposition()
         panel.orderFrontRegardless()
         installMonitors()
+        observeContent()
+    }
+
+    /// Keeps the island size in step with the tiles, and wakes the tiles when it opens.
+    private func observeContent() {
+        let main = DispatchQueue.main
+        settings.$tileOrder.map { _ in () }
+            .merge(with: settings.$hiddenTiles.map { _ in () },
+                   music.$nowPlaying.map { _ in () },
+                   music.$lyrics.map { _ in () })
+            .receive(on: main)
+            .sink { [weak self] in self?.syncLayout() }
+            .store(in: &cancellables)
+
+        model.$state
+            .removeDuplicates()
+            .receive(on: main)
+            .sink { [weak self] state in self?.stateChanged(state) }
+            .store(in: &cancellables)
+    }
+
+    private func syncLayout() {
+        model.expandedBodyWidth = settings.expandedBodyWidth
+        model.showsLyrics = settings.isVisible(.music) && music.nowPlaying != nil && !music.lyrics.isEmpty
+    }
+
+    private func stateChanged(_ state: IslandModel.State) {
+        let open = state == .expanded
+        music.setActive(open && settings.isVisible(.music))
+        guard open else { return }
+        if settings.isVisible(.weather) { weather.refresh() }
+        if settings.isVisible(.calendar) { calendar.activate() }
     }
 
     /// Centre the panel on the notch of the screen that has one.

@@ -18,13 +18,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
     private var island: IslandController!
+    private var music: MusicService!
+    private var weather: WeatherService!
+    private var calendar: CalendarService!
+    private var timer: FocusTimer!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "capsule.fill", accessibilityDescription: "Notch")
         menu.delegate = self
         statusItem.menu = menu
-        island = IslandController(settings: settings)
+        music = MusicService(settings: settings)
+        weather = WeatherService(settings: settings)
+        calendar = CalendarService()
+        timer = FocusTimer()
+        island = IslandController(settings: settings, music: music, weather: weather,
+                                  calendar: calendar, timer: timer)
+        timer.onFinish = { [weak self] in
+            self?.island.model.showPeek(Peek(symbol: "timer", title: "Focus done", subtitle: "25 min"), seconds: 4)
+        }
     }
 
     // MARK: Menu
@@ -44,6 +56,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         themeItem.submenu = themeMenu
         menu.addItem(themeItem)
 
+        let cityTitle = settings.city.isEmpty ? "Weather City…" : "Weather City: \(settings.city)…"
+        addItem(to: menu, cityTitle, #selector(askCity))
+        let covers = NSMenuItem(title: "Spotify Covers (asks Spotify's servers)", action: #selector(toggleCovers),
+                                keyEquivalent: "")
+        covers.target = self
+        covers.state = settings.spotifyCovers ? .on : .off
+        menu.addItem(covers)
+
+        menu.addItem(.separator())
         // Temporary, to try each state by hand.
         let testItem = NSMenuItem(title: "Test", action: nil, keyEquivalent: "")
         let testMenu = NSMenu()
@@ -62,6 +83,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         menu.addItem(item)
+    }
+
+    @objc private func askCity() {
+        let alert = NSAlert()
+        alert.messageText = "Weather city"
+        alert.informativeText = "Only this name and its coordinates are sent to Open-Meteo."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = settings.city
+        field.placeholderString = "Lisbon"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate()
+        alert.window.initialFirstResponder = field
+        if alert.runModal() == .alertFirstButtonReturn {
+            settings.city = field.stringValue.trimmingCharacters(in: .whitespaces)
+        }
+    }
+
+    @objc private func toggleCovers() {
+        settings.spotifyCovers.toggle()
     }
 
     @objc private func testCompact() { island.model.compactActive.toggle() }

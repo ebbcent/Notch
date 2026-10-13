@@ -56,6 +56,7 @@ struct IslandView: View {
         .frame(width: model.size.width, height: model.size.height)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.spring(response: 0.38, dampingFraction: 0.8), value: model.state)
+        .animation(.spring(response: 0.38, dampingFraction: 0.8), value: model.size)
         .animation(.easeInOut(duration: 0.2), value: settings.theme)
     }
 
@@ -76,7 +77,7 @@ struct IslandView: View {
                     .transition(.opacity)
             }
         case .expanded:
-            ExpandedView(palette: palette)
+            ExpandedView(palette: palette, settings: settings, showsLyrics: model.showsLyrics)
                 .padding(.top, notch.height + Layout.tileTopGap)
                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
         }
@@ -128,42 +129,5 @@ struct PeekView: View {
         }
         .lineLimit(1)
         .padding(.horizontal, 16)
-    }
-}
-
-/// The open island: a row of tiles and, below, the lyrics.
-/// Tiles are empty frames for now; their content comes in the next step.
-struct ExpandedView: View {
-    let palette: Palette
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: Layout.tileGap) {
-                Tile(palette: palette, width: Layout.wideTile) { placeholder("Music") }
-                Tile(palette: palette, width: Layout.wideTile) { placeholder("Weather") }
-                Tile(palette: palette, width: Layout.wideTile) { placeholder("Calendar") }
-                Tile(palette: palette, width: Layout.narrowTile) { placeholder("Timer") }
-            }
-            .padding(.horizontal, Layout.outerPadding)
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func placeholder(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(palette.secondary)
-    }
-}
-
-struct Tile<Content: View>: View {
-    let palette: Palette
-    let width: CGFloat
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        content
-            .frame(width: width, height: Layout.tileHeight)
-            .background(RoundedRectangle(cornerRadius: Layout.tileRadius, style: .continuous).fill(palette.tile))
     }
 }
