@@ -165,7 +165,7 @@ final class ClaudeService: ObservableObject {
 
     // MARK: Text
 
-    static func activity(tool: String, input: [String: Any]) -> ClaudeActivity {
+    nonisolated static func activity(tool: String, input: [String: Any]) -> ClaudeActivity {
         let file = (input["file_path"] as? String ?? input["notebook_path"] as? String)
             .map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
         switch tool {
@@ -191,7 +191,7 @@ final class ClaudeService: ObservableObject {
         }
     }
 
-    static func permissionTitle(_ tool: String) -> String {
+    nonisolated static func permissionTitle(_ tool: String) -> String {
         switch tool {
         case "Bash": return "Claude Code wants to run a command"
         case "Edit", "MultiEdit", "Write", "NotebookEdit": return "Claude Code wants to change a file"
@@ -201,7 +201,7 @@ final class ClaudeService: ObservableObject {
     }
 
     /// The full request, never shortened: the command for Bash, otherwise every input field.
-    static func permissionBody(tool: String, input: [String: Any]) -> String {
+    nonisolated static func permissionBody(tool: String, input: [String: Any]) -> String {
         if tool == "Bash", let command = input["command"] as? String {
             if let description = input["description"] as? String, !description.isEmpty {
                 return "# " + description + "\n" + command
@@ -214,7 +214,7 @@ final class ClaudeService: ObservableObject {
         return text
     }
 
-    static func duration(_ seconds: TimeInterval) -> String {
+    nonisolated static func duration(_ seconds: TimeInterval) -> String {
         let s = Int(seconds.rounded())
         if s < 60 { return "\(s) s" }
         if s < 3600 { return "\(s / 60) min \(String(format: "%02d", s % 60)) s" }
@@ -223,11 +223,11 @@ final class ClaudeService: ObservableObject {
 
     // MARK: Setup text for the user
 
-    static var hookScriptPath: String {
+    nonisolated static var hookScriptPath: String {
         Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/notch-hook.sh").path
     }
 
-    static var settingsSnippet: String {
+    nonisolated static var settingsSnippet: String {
         let command = hookScriptPath
         func entry(_ timeout: Int, matcher: Bool) -> String {
             let m = matcher ? "\"matcher\": \"*\", " : ""
