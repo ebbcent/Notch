@@ -20,6 +20,13 @@ struct NowPlaying: Equatable {
     var fetchedAt: Date
     var trackID: String
 
+    /// Same track and play state, and the position has not jumped (seek): no need to republish.
+    func continues(_ other: NowPlaying?) -> Bool {
+        guard let other, other.trackID == trackID, other.isPlaying == isPlaying,
+              other.title == title, other.artist == artist else { return false }
+        return abs(other.position(at: fetchedAt) - position) < 1.5
+    }
+
     /// Position now, interpolated between polls.
     func position(at date: Date) -> Double {
         let p = position + (isPlaying ? date.timeIntervalSince(fetchedAt) : 0)
@@ -39,8 +46,9 @@ final class MusicService: ObservableObject {
     @Published private(set) var nowPlaying: NowPlaying?
     @Published private(set) var artwork: NSImage?
     @Published private(set) var lyrics: [LyricLine] = []
-    /// Set when the user refused Automation for a player.
-    @Published private(set) var deniedPlayer: Player?
+    /// Players the user refused Automation for (the tile says how to allow it).
+    @Published private(set) var deniedPlayers: Set<Player> = []
+    var deniedPlayer: Player? { deniedPlayers.first }
 
     private let settings: Settings
     private var pollTask: Task<Void, Never>?
@@ -58,6 +66,8 @@ final class MusicService: ObservableObject {
         pollTask?.cancel()
         pollTask = nil
         guard on else { return }
+        // A refusal may have been changed in System Settings since: ask macOS again (no dialog).
+        checkedPermission.subtract(deniedPlayers)
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
@@ -75,7 +85,8 @@ final class MusicService: ObservableObject {
     private func send(_ command: String) {
         guard let player = nowPlaying?.player else { return }
         Task {
-            _ = await AppleScript.run("tell application id \"\(player.rawValue)\" to \(command)")
+            guard runningPlayers().contains(player) else { return }
+            _ = await AppleScript.run(AppleScript.ifRunning(player.rawValue, "tell application id \"\(player.rawValue)\" to \(command)"))
             try? await Task.sleep(for: .milliseconds(250))
             await refresh()
         }
@@ -96,16 +107,20 @@ final class MusicService: ObservableObject {
                 // Asks once per player; macOS remembers the answer.
                 let status = await AppleScript.automationPermission(for: player.rawValue)
                 if status == -1743 { // errAEEventNotPermitted
-                    deniedPlayer = player
-                    continue
+                    deniedPlayers.insert(player)
+                } else {
+                    deniedPlayers.remove(player)
                 }
-                if deniedPlayer == player { deniedPlayer = nil }
             }
-            if deniedPlayer == player { continue }
+            if deniedPlayers.contains(player) { continue }
             if let state = await Self.read(player) { states.append(state) }
         }
         let current = states.first(where: \.isPlaying) ?? states.first
-        if current != nowPlaying { nowPlaying = current }
+        if let current {
+            if !current.continues(nowPlaying) { nowPlaying = current }
+        } else if nowPlaying != nil {
+            nowPlaying = nil
+        }
         if let current {
             if artworkTrack != current.trackID { loadArtwork(for: current) }
             if lyricsTrack != current.trackID { loadLyrics(for: current) }
@@ -143,7 +158,7 @@ final class MusicService: ObservableObject {
             end tell
             """
         }
-        let values = await AppleScript.run(source)
+        let values = await AppleScript.run(AppleScript.ifRunning(player.rawValue, source))
         guard values.count >= 7, case .text(let state)? = values.first else { return nil }
         return NowPlaying(player: player,
                           title: values[1].string, artist: values[2].string, album: values[3].string,
@@ -161,18 +176,19 @@ final class MusicService: ObservableObject {
             var image: NSImage?
             switch track.player {
             case .music:
-                let values = await AppleScript.run("""
+                let values = await AppleScript.run(AppleScript.ifRunning(Player.music.rawValue, """
                 tell application id "com.apple.Music"
                     try
                         return {raw data of artwork 1 of current track}
                     end try
                 end tell
-                """)
+                """))
                 if case .data(let data)? = values.first { image = NSImage(data: data) }
             case .spotify:
                 // Off by default: fetching the cover is a request to Spotify's servers.
                 guard settings.spotifyCovers else { break }
-                let values = await AppleScript.run("tell application id \"com.spotify.client\" to return {artwork url of current track}")
+                let values = await AppleScript.run(AppleScript.ifRunning(Player.spotify.rawValue,
+                    "tell application id \"com.spotify.client\" to return {artwork url of current track}"))
                 if let url = URL(string: values.first?.string ?? ""),
                    let result = try? await Net.session.data(from: url) {
                     image = NSImage(data: result.0)
@@ -234,6 +250,16 @@ enum ScriptValue: Sendable {
 /// Runs AppleScript off the main thread, one script at a time.
 enum AppleScript {
     private static let queue = DispatchQueue(label: "local.notch.applescript")
+
+    /// Wraps a script so it does nothing if the player is not running:
+    /// AppleScript would otherwise launch it.
+    static func ifRunning(_ bundleID: String, _ body: String) -> String {
+        """
+        if application id "\(bundleID)" is running then
+        \(body)
+        end if
+        """
+    }
 
     static func run(_ source: String) async -> [ScriptValue] {
         await withCheckedContinuation { continuation in

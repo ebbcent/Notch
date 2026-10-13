@@ -123,8 +123,12 @@ final class ClaudeService: ObservableObject {
         requests.append(request)
         if requests.count == 1 { showCurrent() }
 
-        // The hook gives up after `answerTimeout`; drop the request then too.
         let id = request.id
+        // Esc or quit in Claude Code: the hook goes away, so does the card.
+        connection.onHangUp { [weak self] in
+            MainActor.assumeIsolated { self?.answer(id, with: nil) }
+        }
+        // The hook gives up after `answerTimeout`; drop the request then too.
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(HookSocket.answerTimeout))
             self?.answer(id, with: nil)
@@ -132,8 +136,10 @@ final class ClaudeService: ObservableObject {
     }
 
     /// `true` allow, `false` deny, `nil` hand back to Claude Code's own prompt.
-    func answer(_ id: UUID? = nil, with allow: Bool?) {
-        guard let index = requests.firstIndex(where: { $0.id == (id ?? requests.first?.id) }) else { return }
+    /// Always names the request it answers, so a double press cannot reach the next one.
+    func answer(_ id: UUID, with allow: Bool?) {
+        guard let index = requests.firstIndex(where: { $0.id == id }) else { return }
+        if allow == true, index == 0, !currentFullySeen { return }
         let request = requests.remove(at: index)
         switch allow {
         case true?: request.connection.reply("allow")
@@ -145,22 +151,45 @@ final class ClaudeService: ObservableObject {
 
     private func showCurrent() {
         currentFullySeen = false
+        seenCheck?.cancel()
+        cardShownAt = Date()
         hotKeys.unregisterAll()
-        guard current != nil else { return }
-        let a = hotKeys.register(HotKeys.allow) { [weak self] in self?.allowFromShortcut() }
-        let d = hotKeys.register(HotKeys.deny) { [weak self] in self?.answer(with: false) }
-        shortcutsAvailable = a && d
+        guard let id = current?.id else { return }
+        let allowOK = hotKeys.register(HotKeys.allow) { [weak self] in self?.allowFromShortcut(id) }
+        let denyOK = hotKeys.register(HotKeys.deny) { [weak self] in self?.answer(id, with: false) }
+        shortcutsAvailable = allowOK && denyOK
+        if !shortcutsAvailable { hotKeys.unregisterAll() } // both or none
     }
 
-    /// Set by the card once the whole request has been on screen.
-    @Published var currentFullySeen = false
+    /// True once every line of the current request has been on screen, and the card
+    /// has been up for at least `minimumReadTime`.
+    @Published private(set) var currentFullySeen = false
+    static let minimumReadTime: TimeInterval = 0.8
+    private var cardShownAt = Date()
+    private var seenCheck: Task<Void, Never>?
 
-    private func allowFromShortcut() {
-        guard currentFullySeen else {
-            NSSound.beep() // scroll through the whole command first
+    /// Called by the card when its last line is visible.
+    func lastLineVisible(for id: UUID) {
+        guard current?.id == id, !currentFullySeen else { return }
+        let wait = Self.minimumReadTime - Date().timeIntervalSince(cardShownAt)
+        guard wait > 0 else {
+            currentFullySeen = true
             return
         }
-        answer(with: true)
+        seenCheck?.cancel()
+        seenCheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard let self, !Task.isCancelled, self.current?.id == id else { return }
+            self.currentFullySeen = true
+        }
+    }
+
+    private func allowFromShortcut(_ id: UUID) {
+        guard current?.id == id, currentFullySeen else {
+            NSSound.beep() // not readable yet: scroll through the whole request first
+            return
+        }
+        answer(id, with: true)
     }
 
     // MARK: Text
@@ -200,18 +229,44 @@ final class ClaudeService: ObservableObject {
         }
     }
 
-    /// The full request, never shortened: the command for Bash, otherwise every input field.
+    /// The full request, never shortened: the command for Bash, otherwise every input
+    /// field. Invisible and direction-changing characters are made visible, so what you
+    /// read is what runs.
     nonisolated static func permissionBody(tool: String, input: [String: Any]) -> String {
+        let text: String
         if tool == "Bash", let command = input["command"] as? String {
-            if let description = input["description"] as? String, !description.isEmpty {
-                return "# " + description + "\n" + command
-            }
-            return command
+            let description = input["description"] as? String ?? ""
+            text = description.isEmpty ? command : "# " + description + "\n" + command
+        } else {
+            text = input.keys.sorted().map { key -> String in
+                let value = input[key] ?? ""
+                if let string = value as? String {
+                    return string.contains("\n") ? "\(key):\n\(string)" : "\(key): \(string)"
+                }
+                let options: JSONSerialization.WritingOptions = [.fragmentsAllowed, .prettyPrinted,
+                                                                  .sortedKeys, .withoutEscapingSlashes]
+                let json = (try? JSONSerialization.data(withJSONObject: value, options: options))
+                    .map { String(decoding: $0, as: UTF8.self) } ?? String(describing: value)
+                return "\(key): \(json)"
+            }.joined(separator: "\n")
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: input,
-                                                     options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
-              let text = String(data: data, encoding: .utf8) else { return String(describing: input) }
-        return text
+        return revealInvisible(text)
+    }
+
+    nonisolated static func revealInvisible(_ text: String) -> String {
+        var out = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            let hidden = (v < 0x20 && v != 0x0A && v != 0x09) || v == 0x7F || v == 0xAD
+                || (0x200B...0x200F).contains(v) || (0x202A...0x202E).contains(v)
+                || (0x2060...0x2069).contains(v) || v == 0x2028 || v == 0x2029 || v == 0xFEFF
+            if hidden {
+                out.append(contentsOf: String(format: "⟨U+%04X⟩", v).unicodeScalars)
+            } else {
+                out.append(scalar)
+            }
+        }
+        return String(out)
     }
 
     nonisolated static func duration(_ seconds: TimeInterval) -> String {
@@ -227,11 +282,20 @@ final class ClaudeService: ObservableObject {
         Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/notch-hook.sh").path
     }
 
+    /// The hook command, quoted for the shell (the path may contain spaces).
+    nonisolated static var hookCommand: String { shellQuote(hookScriptPath) }
+
+    nonisolated static func shellQuote(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     nonisolated static var settingsSnippet: String {
-        let command = hookScriptPath
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        let command = (try? encoder.encode(hookCommand)).map { String(decoding: $0, as: UTF8.self) } ?? "\"\""
         func entry(_ timeout: Int, matcher: Bool) -> String {
             let m = matcher ? "\"matcher\": \"*\", " : ""
-            return "[{ \(m)\"hooks\": [{ \"type\": \"command\", \"command\": \"\(command)\", \"timeout\": \(timeout) }] }]"
+            return "[{ \(m)\"hooks\": [{ \"type\": \"command\", \"command\": \(command), \"timeout\": \(timeout) }] }]"
         }
         return """
         "hooks": {

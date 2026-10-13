@@ -102,10 +102,10 @@ final class IslandController {
             .sink { [weak self] in self?.syncLayout() }
             .store(in: &cancellables)
 
-        model.$state
-            .removeDuplicates()
+        model.$state.map { _ in () }
+            .merge(with: model.$cardHeight.map { _ in () })
             .receive(on: main)
-            .sink { [weak self] state in self?.stateChanged(state) }
+            .sink { [weak self] in self?.contentChanged() }
             .store(in: &cancellables)
 
         claude.$isWorking
@@ -124,10 +124,11 @@ final class IslandController {
         claude.onPeek = { [weak self] peek in self?.model.showPeek(peek, seconds: 4) }
 
         // The window follows the island's size (see fitWindow).
-        model.$state.map { _ in () }
-            .merge(with: model.$expandedBodyWidth.map { _ in () },
-                   model.$showsLyrics.map { _ in () },
-                   model.$geometry.map { _ in () })
+        Publishers.MergeMany(model.$state.map { _ in () }.eraseToAnyPublisher(),
+                             model.$expandedBodyWidth.map { _ in () }.eraseToAnyPublisher(),
+                             model.$showsLyrics.map { _ in () }.eraseToAnyPublisher(),
+                             model.$cardHeight.map { _ in () }.eraseToAnyPublisher(),
+                             model.$geometry.map { _ in () }.eraseToAnyPublisher())
             .receive(on: main)
             .sink { [weak self] in self?.fitWindow() }
             .store(in: &cancellables)
@@ -150,10 +151,12 @@ final class IslandController {
         model.showsLyrics = settings.isVisible(.music) && music.nowPlaying != nil && !music.lyrics.isEmpty
     }
 
-    private func stateChanged(_ state: IslandModel.State) {
-        let open = state == .expanded
-        music.setActive(open && settings.isVisible(.music))
-        guard open else { return }
+    /// Wakes the tiles only when they are what the island shows: a permission card
+    /// alone never starts music polling nor asks for Calendar access.
+    private func contentChanged() {
+        let tilesShown = model.state == .expanded && model.cardHeight == nil
+        music.setActive(tilesShown && settings.isVisible(.music))
+        guard tilesShown else { return }
         if settings.isVisible(.weather) { weather.refresh() }
         if settings.isVisible(.calendar) { calendar.activate() }
     }
@@ -211,7 +214,10 @@ final class IslandController {
 
         if let m = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown], handler: { [weak self] event in
             MainActor.assumeIsolated {
-                if let self, event.window === self.panel, self.model.hotRect.contains(NSEvent.mouseLocation) {
+                // A click keeps the island open (except on a permission card, which
+                // closes by itself once answered).
+                if let self, event.window === self.panel, self.model.cardHeight == nil,
+                   self.model.hotRect.contains(NSEvent.mouseLocation) {
                     self.model.click()
                 }
             }

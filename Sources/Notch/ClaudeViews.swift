@@ -18,7 +18,9 @@ enum CardLayout {
 
     /// Height of the card below the notch; the text box scrolls past `maxText`.
     static func height(for text: String, maxText: CGFloat) -> CGFloat {
-        let box = min(textHeight(text), maxText) + 2 * boxPadding
+        // Very long requests (a large file write) scroll anyway: skip measuring them.
+        let measured = text.utf8.count > 50_000 ? maxText : textHeight(text)
+        let box = min(measured, maxText) + 2 * boxPadding
         return Layout.tileTopGap + header + gap + box + 12 + buttons + Layout.tileTopGap
     }
 }
@@ -30,6 +32,13 @@ struct PermissionCard: View {
     let pendingCount: Int
     @EnvironmentObject var claude: ClaudeService
     @State private var viewportHeight: CGFloat = 0
+    @State private var markerY: CGFloat = .greatestFiniteMagnitude
+
+    private func checkSeen() {
+        if viewportHeight > 0, markerY <= viewportHeight + 0.5 {
+            claude.lastLineVisible(for: request.id)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -63,10 +72,10 @@ struct PermissionCard: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    // Reaching this marker means the last line has been shown.
+                    // Reaching this marker means the last line is on screen.
                     GeometryReader { geo in
                         Color.clear.preference(key: EndMarkerKey.self,
-                                               value: geo.frame(in: .named("requestScroll")).minY)
+                                               value: geo.frame(in: .named("requestScroll")).maxY)
                     }
                     .frame(height: 1)
                 }
@@ -74,19 +83,25 @@ struct PermissionCard: View {
             }
             .coordinateSpace(name: "requestScroll")
             .background(GeometryReader { geo in
-                Color.clear.onAppear { viewportHeight = geo.size.height }
-                    .onChange(of: geo.size.height) { _, h in viewportHeight = h }
+                Color.clear.preference(key: ViewportKey.self, value: geo.size.height)
             })
             .onPreferenceChange(EndMarkerKey.self) { endY in
-                if viewportHeight > 0, endY <= viewportHeight, !claude.currentFullySeen {
-                    claude.currentFullySeen = true
+                MainActor.assumeIsolated {
+                    markerY = endY
+                    checkSeen()
+                }
+            }
+            .onPreferenceChange(ViewportKey.self) { height in
+                MainActor.assumeIsolated {
+                    viewportHeight = height
+                    checkSeen()
                 }
             }
             .background(RoundedRectangle(cornerRadius: Layout.tileRadius, style: .continuous).fill(palette.tile))
             .padding(.top, CardLayout.gap)
 
             HStack(spacing: 8) {
-                Button("Ask in Terminal") { claude.answer(with: nil) }
+                Button("Ask in Terminal") { claude.answer(request.id, with: nil) }
                     .buttonStyle(.plain)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(palette.secondary)
@@ -99,11 +114,11 @@ struct PermissionCard: View {
                 Spacer()
                 CardButton(title: "Deny", shortcut: claude.shortcutsAvailable ? HotKeys.deny.label : nil,
                            fill: palette.secondary.opacity(0.2), text: palette.text) {
-                    claude.answer(with: false)
+                    claude.answer(request.id, with: false)
                 }
                 CardButton(title: "Allow", shortcut: claude.shortcutsAvailable ? HotKeys.allow.label : nil,
                            fill: palette.accent, text: palette.background) {
-                    claude.answer(with: true)
+                    claude.answer(request.id, with: true)
                 }
                 .disabled(!claude.currentFullySeen)
                 .opacity(claude.currentFullySeen ? 1 : 0.4)
@@ -120,6 +135,11 @@ struct PermissionCard: View {
 private struct EndMarkerKey: PreferenceKey {
     static let defaultValue: CGFloat = .greatestFiniteMagnitude
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct ViewportKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 struct CardButton: View {

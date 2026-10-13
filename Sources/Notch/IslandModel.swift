@@ -171,16 +171,13 @@ final class IslandModel: ObservableObject {
         }
     }
 
-    /// A click on the island keeps it open; a second click releases it.
+    /// A click on the island keeps it open (also when the click is on a button).
+    /// A click anywhere else releases it.
     func click() {
         hoverTask?.cancel()
-        if pinned {
-            pinned = false
-        } else {
-            pinned = true
-            wantsExpanded = true
-            update()
-        }
+        pinned = true
+        wantsExpanded = true
+        update()
     }
 
     func clickOutside() {

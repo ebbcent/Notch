@@ -14,7 +14,7 @@ enum NotchApp {
         let delegate = AppDelegate()
         app.delegate = delegate
         app.setActivationPolicy(.accessory) // menu bar only, no Dock icon
-        app.run()
+        withExtendedLifetime(delegate) { app.run() } // NSApplication holds its delegate weakly
     }
 }
 

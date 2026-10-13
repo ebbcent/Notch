@@ -2,6 +2,11 @@ import Foundation
 
 /// Local Unix socket between the Claude Code hook and the app.
 /// Only the current user can open it (directory 0700, socket 0600). Nothing goes on the network.
+///
+/// Protocol: the hook sends one line of compact JSON (the hook input). For a permission
+/// request it then waits, connection open, for one line back: "allow" or "deny". If the
+/// hook goes away (Esc or quit in Claude Code), the app sees the connection close and
+/// drops the request.
 enum HookSocket {
     static var directory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -13,6 +18,8 @@ enum HookSocket {
     /// How long a permission request waits for an answer in the island before
     /// handing it back to Claude Code's own prompt.
     static let answerTimeout: TimeInterval = 120
+
+    static let maxMessage = 8 * 1024 * 1024
 
     static func address(_ path: String) -> sockaddr_un? {
         var addr = sockaddr_un()
@@ -52,16 +59,21 @@ enum HookSocket {
         }
     }
 
-    static func readAll(_ fd: Int32, limit: Int) -> Data {
+    /// Reads up to the first newline (excluded), EOF, timeout or `limit`.
+    static func readLine(_ fd: Int32, limit: Int) -> Data? {
         var data = Data()
-        let size = 16 * 1024
+        let size = 64 * 1024
         var buffer = [UInt8](repeating: 0, count: size)
         while data.count < limit {
             let n = Darwin.read(fd, &buffer, size)
             if n <= 0 { break }
+            if let newline = buffer[0..<n].firstIndex(of: 0x0A) {
+                data.append(buffer, count: newline)
+                return data
+            }
             data.append(buffer, count: n)
         }
-        return data
+        return data.isEmpty ? nil : data
     }
 }
 
@@ -83,7 +95,10 @@ enum HookClient {
     static func forward(_ input: Data, to path: String, timeout: TimeInterval = HookSocket.answerTimeout) -> Data? {
         guard let json = try? JSONSerialization.jsonObject(with: input) as? [String: Any],
               let event = json["hook_event_name"] as? String,
+              // Compact JSON never contains a raw newline, so one line = one message.
+              var line = try? JSONSerialization.data(withJSONObject: json),
               var addr = HookSocket.address(path) else { return nil }
+        line.append(0x0A)
         let waits = event == "PermissionRequest"
         HookSocket.ignoreBrokenPipes()
 
@@ -96,13 +111,10 @@ enum HookClient {
                 connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard connected == 0, HookSocket.writeAll(fd, input) else { return nil }
-        shutdown(fd, SHUT_WR)
-        guard waits else { return nil }
+        guard connected == 0, HookSocket.writeAll(fd, line), waits else { return nil }
 
-        let reply = String(decoding: HookSocket.readAll(fd, limit: 1024), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return decision(for: reply)
+        let reply = HookSocket.readLine(fd, limit: 1024).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        return decision(for: reply.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// The PermissionRequest hook output for "allow" / "deny"; nil lets Claude Code ask itself.
@@ -124,13 +136,33 @@ enum HookClient {
 
 // MARK: - App side
 
-/// One connected hook. For a permission request it stays open until answered.
+/// One connected hook. For a permission request it stays open until answered,
+/// and reports when the hook goes away.
 final class HookConnection: @unchecked Sendable {
     private let fd: Int32
     private let lock = NSLock()
     private var open = true
+    private var hangUpSource: DispatchSourceRead?
 
     init(fd: Int32) { self.fd = fd }
+
+    /// Calls `handler` on the main queue if the hook closes the connection first.
+    func onHangUp(_ handler: @escaping @Sendable () -> Void) {
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global())
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            var byte: UInt8 = 0
+            // Readable with nothing to read: the hook has gone.
+            if recv(self.fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT) <= 0 {
+                source.cancel()
+                DispatchQueue.main.async(execute: handler)
+            }
+        }
+        lock.lock()
+        hangUpSource = source
+        lock.unlock()
+        source.resume()
+    }
 
     /// Sends the answer ("allow" / "deny") and closes.
     func reply(_ answer: String) {
@@ -144,27 +176,29 @@ final class HookConnection: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard open else { return }
         open = false
+        hangUpSource?.cancel()
+        hangUpSource = nil
         if let data { _ = HookSocket.writeAll(fd, data) } // the hook may be gone: EPIPE, not a signal
         Darwin.close(fd)
     }
 
-    deinit { if open { Darwin.close(fd) } }
+    deinit {
+        hangUpSource?.cancel()
+        if open { Darwin.close(fd) }
+    }
 }
 
 final class HookServer: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "local.notch.hooks")
-    private var listenFD: Int32 = -1
+    private let acceptQueue = DispatchQueue(label: "local.notch.hooks.accept")
     private var source: DispatchSourceRead?
+    private var path = HookSocket.path
+    private(set) var isListening = false
     private let onMessage: @Sendable ([String: Any], HookConnection) -> Void
 
     /// `onMessage` is called on the main queue.
     init(onMessage: @escaping @Sendable ([String: Any], HookConnection) -> Void) {
         self.onMessage = onMessage
     }
-
-    var isListening: Bool { listenFD >= 0 }
-
-    private var path = HookSocket.path
 
     func start(path: String = HookSocket.path) -> Bool {
         self.path = path
@@ -184,41 +218,43 @@ final class HookServer: @unchecked Sendable {
                 bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard bound == 0, chmod(path, 0o600) == 0, listen(fd, 16) == 0 else {
+        guard bound == 0, chmod(path, 0o600) == 0, listen(fd, 64) == 0 else {
             close(fd)
             return false
         }
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
-        listenFD = fd
 
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-        source.setEventHandler { [weak self] in self?.acceptAll() }
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: acceptQueue)
+        source.setEventHandler { [weak self] in self?.acceptAll(fd) }
+        source.setCancelHandler { close(fd) }
         source.resume()
         self.source = source
+        isListening = true
         return true
     }
 
     func stop() {
-        source?.cancel()
+        source?.cancel() // closes the listening socket in the cancel handler
         source = nil
-        if listenFD >= 0 { close(listenFD); listenFD = -1 }
+        isListening = false
         unlink(path)
     }
 
-    private func acceptAll() {
+    private func acceptAll(_ listenFD: Int32) {
         while true {
             let client = accept(listenFD, nil, nil)
             guard client >= 0 else { return }
             _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK)
             HookSocket.setTimeouts(client, receive: 2, send: 2)
-            queue.async { [weak self] in self?.handle(client) }
+            // Each hook is read on its own, so a slow one never holds up the others.
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.handle(client) }
         }
     }
 
     private func handle(_ fd: Int32) {
         let connection = HookConnection(fd: fd)
-        let data = HookSocket.readAll(fd, limit: 4 * 1024 * 1024)
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let line = HookSocket.readLine(fd, limit: HookSocket.maxMessage),
+              let json = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             connection.close()
             return
         }

@@ -75,11 +75,11 @@ signed ad-hoc and still works.
 
 ```json
 "hooks": {
-  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/Applications/Notch.app/Contents/Resources/notch-hook.sh", "timeout": 5 }] }],
-  "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "/Applications/Notch.app/Contents/Resources/notch-hook.sh", "timeout": 5 }] }],
-  "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "/Applications/Notch.app/Contents/Resources/notch-hook.sh", "timeout": 130 }] }],
-  "Notification": [{ "hooks": [{ "type": "command", "command": "/Applications/Notch.app/Contents/Resources/notch-hook.sh", "timeout": 5 }] }],
-  "Stop": [{ "hooks": [{ "type": "command", "command": "/Applications/Notch.app/Contents/Resources/notch-hook.sh", "timeout": 5 }] }]
+  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "'/Applications/Notch.app/Contents/Resources/notch-hook.sh'", "timeout": 5 }] }],
+  "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "'/Applications/Notch.app/Contents/Resources/notch-hook.sh'", "timeout": 5 }] }],
+  "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "'/Applications/Notch.app/Contents/Resources/notch-hook.sh'", "timeout": 130 }] }],
+  "Notification": [{ "hooks": [{ "type": "command", "command": "'/Applications/Notch.app/Contents/Resources/notch-hook.sh'", "timeout": 5 }] }],
+  "Stop": [{ "hooks": [{ "type": "command", "command": "'/Applications/Notch.app/Contents/Resources/notch-hook.sh'", "timeout": 5 }] }]
 }
 ```
 
@@ -118,7 +118,7 @@ Bubbles · Theme (Dark Matte / White Matte) · Claude Code · Launch at Login ·
 ## Remove
 
 ```sh
-pkill -x Notch
+pkill -f "/Applications/Notch.app/Contents/MacOS/Notch$"   # the app, not hooks in flight
 rm -rf /Applications/Notch.app
 tccutil reset All local.notch.island        # forget the permissions granted to Notch
 defaults delete local.notch.island           # forget the settings
