@@ -48,6 +48,9 @@ final class WeatherService: ObservableObject {
             }
     }
 
+    /// °F where the region uses US units, °C everywhere else.
+    nonisolated static var usesFahrenheit: Bool { Locale.current.measurementSystem == .us }
+
     /// Refreshes if the data is older than 30 minutes (or if forced).
     func refresh(force: Bool = false) {
         if !force, let lastFetch, Date().timeIntervalSince(lastFetch) < 30 * 60, case .ready = status { return }
@@ -91,6 +94,7 @@ final class WeatherService: ObservableObject {
             URLQueryItem(name: "current", value: "temperature_2m,weather_code,is_day"),
             URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min"),
             URLQueryItem(name: "forecast_days", value: "1"),
+            URLQueryItem(name: "temperature_unit", value: WeatherService.usesFahrenheit ? "fahrenheit" : "celsius"),
             URLQueryItem(name: "timezone", value: "auto"),
         ]
         guard let f = try? await Net.session.data(from: forecast.url!),

@@ -1,5 +1,4 @@
 import AppKit
-import ServiceManagement
 import SwiftUI
 
 @main
@@ -25,6 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var calendar: CalendarService!
     private var timer: FocusTimer!
     private var peeks: PeekCenter!
+    private lazy var settingsWindow = SettingsWindow { [unowned self] in
+        AnyView(SettingsView(settings: self.settings, music: self.music, weather: self.weather,
+                             setFocusPeeks: { [unowned self] on in self.peeks.setFocusPeeks(on) }))
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // One copy at a time.
@@ -49,6 +52,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         island = IslandController(settings: settings, music: music, weather: weather,
                                   calendar: calendar, timer: timer)
         peeks = PeekCenter(model: island.model, settings: settings)
+        // First launch: show the settings once (city, tiles, launch at login).
+        if !UserDefaults.standard.bool(forKey: "didShowWelcome") {
+            UserDefaults.standard.set(true, forKey: "didShowWelcome")
+            settingsWindow.show()
+        }
         timer.onFinish = { [weak self] in
             self?.island.model.showPeek(Peek(symbol: "timer", title: "Focus done", subtitle: "25 min"), seconds: 4)
         }
@@ -59,42 +67,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
-        menu.addItem(header("Tiles"))
-        let tiles = NSMenuItem()
-        let editor = NSHostingView(rootView: TilesEditor(settings: settings))
-        editor.frame.size = editor.fittingSize
-        tiles.view = editor
-        menu.addItem(tiles)
-
-        let cityTitle = settings.city.isEmpty ? "Weather City…" : "Weather City: \(settings.city)…"
-        menu.addItem(item(cityTitle, #selector(askCity)))
-        menu.addItem(item("Spotify Covers (asks Spotify's servers)", #selector(toggleCovers),
-                          on: settings.spotifyCovers))
-        menu.addItem(item("Live Activity (music, timer)", #selector(toggleLiveActivity), on: settings.liveActivity))
-        menu.addItem(item("Do Not Disturb Bubbles" + (settings.focusPeeks ? "" : FocusAccess.menuNote),
-                          #selector(toggleFocusPeeks), on: settings.focusPeeks))
-
+        let open = item("Open Island", #selector(openIsland))
+        menu.addItem(open)
         menu.addItem(.separator())
-        menu.addItem(header("Theme"))
+
+        menu.addItem(item("Live Activity", #selector(toggleLiveActivity), on: settings.liveActivity))
+        let themeItem = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
+        let themeMenu = NSMenu()
         for kind in ThemeKind.allCases {
             let i = item(kind.title, #selector(pickTheme(_:)), on: settings.theme == kind)
             i.representedObject = kind.rawValue
-            menu.addItem(i)
+            themeMenu.addItem(i)
         }
+        themeItem.submenu = themeMenu
+        menu.addItem(themeItem)
 
         menu.addItem(.separator())
-        menu.addItem(item("Launch at Login", #selector(toggleLoginItem),
-                          on: SMAppService.mainApp.status == .enabled))
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-        let about = NSMenuItem(title: "Notch \(version)", action: nil, keyEquivalent: "")
-        about.isEnabled = false
-        menu.addItem(about)
+        let settingsItem = item("Settings…", #selector(showSettings))
+        settingsItem.keyEquivalent = ","
+        menu.addItem(settingsItem)
+        menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit Notch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
-    }
-
-    private func header(_ title: String) -> NSMenuItem {
-        NSMenuItem.sectionHeader(title: title)
     }
 
     private func item(_ title: String, _ action: Selector, on: Bool? = nil) -> NSMenuItem {
@@ -112,50 +106,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func askCity() {
-        let alert = NSAlert()
-        alert.messageText = "Weather city"
-        alert.informativeText = "Only this name and its coordinates are sent to Open-Meteo."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = settings.city
-        field.placeholderString = "Lisbon"
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        NSApp.activate()
-        alert.window.initialFirstResponder = field
-        if alert.runModal() == .alertFirstButtonReturn {
-            settings.city = field.stringValue.trimmingCharacters(in: .whitespaces)
-        }
+    @objc private func openIsland() {
+        island.model.expand(pin: true)
     }
 
-    @objc private func toggleCovers() {
-        settings.spotifyCovers.toggle()
+    @objc private func showSettings() {
+        settingsWindow.show()
     }
 
     @objc private func toggleLiveActivity() {
         settings.liveActivity.toggle()
     }
 
-    @objc private func toggleFocusPeeks() {
-        peeks.setFocusPeeks(!settings.focusPeeks)
-    }
-
-    @objc private func toggleLoginItem() {
-        let service = SMAppService.mainApp
-        do {
-            if service.status == .enabled {
-                try service.unregister()
-            } else {
-                try service.register()
-                if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
-            }
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Launch at login could not be changed"
-            alert.informativeText = "\(error.localizedDescription)\n\nMove Notch to /Applications and try again."
-            NSApp.activate()
-            alert.runModal()
-        }
-    }
 }

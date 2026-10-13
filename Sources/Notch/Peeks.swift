@@ -157,16 +157,6 @@ enum FocusAccess {
         }
     }
 
-    static var menuNote: String {
-        switch status {
-        case .authorized: return ""
-        case .notDetermined: return " (asks for the Focus permission)"
-        case .denied: return " (Focus permission refused)"
-        case .restricted: return " (not available on this Mac)"
-        @unknown default: return ""
-        }
-    }
-
     @MainActor
     static func explainRefusal(_ status: INFocusStatusAuthorizationStatus) {
         let alert = NSAlert()

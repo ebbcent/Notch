@@ -125,6 +125,7 @@ struct IconButton: View {
     let symbol: String
     let size: CGFloat
     let color: Color
+    var label: String = ""
     let action: () -> Void
 
     var body: some View {
@@ -136,6 +137,8 @@ struct IconButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 
@@ -176,15 +179,28 @@ struct MusicTile: View {
                                         palette: palette)
                         }
                         .padding(.bottom, 4)
-                        HStack(spacing: 0) {
-                            IconButton(symbol: "backward.fill", size: 12, color: palette.text) { music.previous() }
-                            Spacer(minLength: 0)
-                            IconButton(symbol: track.isPlaying ? "pause.fill" : "play.fill", size: 14,
-                                       color: palette.text) { music.playPause() }
-                            Spacer(minLength: 0)
-                            IconButton(symbol: "forward.fill", size: 12, color: palette.text) { music.next() }
+                        if music.deniedPlayers.contains(track.player) {
+                            // Controls need the Automation permission the user refused.
+                            Button("Allow control in Settings…") { music.openAutomationSettings() }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(palette.accent)
+                                .frame(height: 22)
+                        } else {
+                            HStack(spacing: 0) {
+                                IconButton(symbol: "backward.fill", size: 12, color: palette.text,
+                                           label: "Previous") { music.previous() }
+                                Spacer(minLength: 0)
+                                IconButton(symbol: track.isPlaying ? "pause.fill" : "play.fill", size: 14,
+                                           color: palette.text, label: track.isPlaying ? "Pause" : "Play") {
+                                    music.playPause()
+                                }
+                                Spacer(minLength: 0)
+                                IconButton(symbol: "forward.fill", size: 12, color: palette.text,
+                                           label: "Next") { music.next() }
+                            }
+                            .padding(.horizontal, -6)
                         }
-                        .padding(.horizontal, -6)
                     }
                     .lineLimit(1)
                     .frame(height: 64)
@@ -193,7 +209,8 @@ struct MusicTile: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else if let denied = music.deniedPlayer {
                 TileMessage(palette: palette, symbol: "lock",
-                            text: "Allow Notch to control \(denied.name) in System Settings › Privacy › Automation")
+                            text: "Notch may not control \(denied.name)",
+                            action: ("Open Settings", { music.openAutomationSettings() }))
             } else {
                 TileMessage(palette: palette, symbol: "music.note", text: "Nothing playing in Spotify or Music")
             }
@@ -289,7 +306,7 @@ struct WeatherTile: View {
                 .padding(.horizontal, 10)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             case .noCity:
-                TileMessage(palette: palette, symbol: "location", text: "Set a city in the menu bar › Weather City…")
+                TileMessage(palette: palette, symbol: "location", text: "Set a city in Settings › Tiles")
             case .loading:
                 ProgressView().controlSize(.small)
             case .cityNotFound:

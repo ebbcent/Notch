@@ -15,7 +15,9 @@ enum Layout {
     static let narrowTile: CGFloat = 84
     static let tileRadius: CGFloat = 12
 
-    static let compactSide: CGFloat = 38          // each side of the notch
+    static let compactSide: CGFloat = 38          // each side of the notch (peek minimum)
+    static let timerSide: CGFloat = 44            // live activity: focus timer
+    static let musicSide: CGFloat = 112           // live activity: cover + title | bars
     static let peekExtraHeight: CGFloat = 40
     static let peekMinWidth: CGFloat = 300
 
@@ -81,6 +83,8 @@ final class IslandModel: ObservableObject {
     @Published var geometry: NotchGeometry
     /// Something wants the compact pill (the focus timer is running).
     @Published var compactActive = false { didSet { update() } }
+    /// Width of each side of the compact pill, set by the live activity shown.
+    @Published var compactSide: CGFloat = Layout.timerSide
     /// Set from the visible tiles and the music state.
     @Published var expandedBodyWidth: CGFloat = Layout.expandedBodyWidth
     @Published var showsLyrics = false
@@ -122,7 +126,7 @@ final class IslandModel: ObservableObject {
         case .resting:
             return n
         case .compact:
-            return CGSize(width: n.width + 2 * Layout.compactSide + ears, height: n.height)
+            return CGSize(width: n.width + 2 * compactSide + ears, height: n.height)
         case .peek:
             return CGSize(width: max(n.width + 2 * Layout.compactSide, Layout.peekMinWidth) + ears,
                           height: n.height + Layout.peekExtraHeight)

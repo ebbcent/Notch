@@ -67,7 +67,7 @@ struct IslandView: View {
         case .resting:
             Color.clear
         case .compact:
-            LiveActivityView(palette: palette, notchSize: notch)
+            LiveActivityView(notchSize: notch)
                 .transition(.opacity)
         case .peek:
             if let peek = model.peek {
@@ -85,18 +85,23 @@ struct IslandView: View {
 }
 
 /// Live activity in the black pill beside the notch: the focus timer while it runs,
-/// otherwise the music playing (cover on the left, moving bars on the right).
+/// otherwise the music playing (cover and title on the left, moving bars on the right).
+/// The pill is always black, so it always uses the Dark Matte colours.
 struct LiveActivityView: View {
-    let palette: Palette
     let notchSize: CGSize
     @EnvironmentObject var timer: FocusTimer
     @EnvironmentObject var music: MusicService
+    @EnvironmentObject var island: IslandModel
+
+    private let palette = ThemeKind.darkMatte.palette
 
     var body: some View {
         HStack(spacing: 0) {
-            leading.frame(width: Layout.compactSide)
+            leading
+                .frame(width: island.compactSide + island.earRadius, alignment: timer.isRunning ? .center : .leading)
             Spacer().frame(width: notchSize.width)
-            trailing.frame(width: Layout.compactSide)
+            trailing
+                .frame(width: island.compactSide + island.earRadius, alignment: timer.isRunning ? .center : .trailing)
         }
         .frame(height: notchSize.height)
         .accessibilityElement(children: .ignore)
@@ -108,16 +113,34 @@ struct LiveActivityView: View {
             Image(systemName: "timer")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(palette.accent)
-        } else if let artwork = music.artwork {
+        } else if let track = music.nowPlaying {
+            HStack(spacing: 7) {
+                cover
+                Text(track.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(palette.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .padding(.leading, island.earRadius + 8)
+            .padding(.trailing, 6)
+        }
+    }
+
+    @ViewBuilder private var cover: some View {
+        if let artwork = music.artwork {
             Image(nsImage: artwork)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 20, height: 20)
                 .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
         } else {
-            Image(systemName: "music.note")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(palette.accent)
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(palette.tile)
+                .frame(width: 20, height: 20)
+                .overlay(Image(systemName: "music.note")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(palette.accent))
         }
     }
 
@@ -129,6 +152,7 @@ struct LiveActivityView: View {
                 .minimumScaleFactor(0.8)
         } else {
             EqualizerBars(color: palette.accent, playing: music.nowPlaying?.isPlaying == true)
+                .padding(.trailing, island.earRadius + 10)
         }
     }
 

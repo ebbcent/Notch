@@ -125,6 +125,7 @@ final class IslandController {
         Publishers.MergeMany(model.$state.map { _ in () }.eraseToAnyPublisher(),
                              model.$expandedBodyWidth.map { _ in () }.eraseToAnyPublisher(),
                              model.$showsLyrics.map { _ in () }.eraseToAnyPublisher(),
+                             model.$compactSide.map { _ in () }.eraseToAnyPublisher(),
                              model.$geometry.map { _ in () }.eraseToAnyPublisher())
             .receive(on: main)
             .sink { [weak self] in self?.fitWindow() }
@@ -133,6 +134,7 @@ final class IslandController {
 
     private func syncLiveActivity() {
         let musicPlaying = settings.liveActivity && music.nowPlaying?.isPlaying == true
+        model.compactSide = timer.isRunning ? Layout.timerSide : Layout.musicSide
         model.compactActive = timer.isRunning || musicPlaying
     }
 

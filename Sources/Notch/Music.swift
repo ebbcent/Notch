@@ -121,10 +121,37 @@ final class MusicService: ObservableObject {
     private func send(_ command: String) {
         guard let player = nowPlaying?.player else { return }
         Task {
-            guard runningPlayers().contains(player) else { return }
-            _ = await AppleScript.run(AppleScript.ifRunning(player.rawValue, "tell application id \"\(player.rawValue)\" to \(command)"))
+            guard runningPlayers().contains(player), await ensurePermission(player) else { return }
+            let result = await AppleScript.run(AppleScript.ifRunning(player.rawValue,
+                "tell application id \"\(player.rawValue)\" to \(command)"))
+            if let error = result.error {
+                MusicLog.log.error("\(player.name, privacy: .public) \(command, privacy: .public) failed: \(error, privacy: .public)")
+                if error.hasPrefix("-1743") { deniedPlayers.insert(player) }
+                return
+            }
             try? await Task.sleep(for: .milliseconds(250))
             await refresh()
+        }
+    }
+
+    /// Asks macOS once per player (the system dialog), then remembers the answer.
+    private func ensurePermission(_ player: Player) async -> Bool {
+        if !checkedPermission.contains(player) {
+            checkedPermission.insert(player)
+            let status = await AppleScript.automationPermission(for: player.rawValue, ask: true)
+            MusicLog.log.notice("Automation for \(player.name, privacy: .public): \(status)")
+            if status == noErr {
+                deniedPlayers.remove(player)
+            } else if status != -600 { // -600: the player quit meanwhile
+                deniedPlayers.insert(player) // -1743 refused, -1744 could not ask
+            }
+        }
+        return !deniedPlayers.contains(player)
+    }
+
+    func openAutomationSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+            NSWorkspace.shared.open(url)
         }
     }
 
@@ -179,18 +206,7 @@ final class MusicService: ObservableObject {
         let running = runningPlayers()
         for player in [Player.spotify, .music] where !running.contains(player) { states[player] = nil }
         for player in running {
-            if !checkedPermission.contains(player) {
-                checkedPermission.insert(player)
-                // Asks once per player; macOS remembers the answer.
-                let status = await AppleScript.automationPermission(for: player.rawValue, ask: true)
-                if status == -1743 { // errAEEventNotPermitted
-                    deniedPlayers.insert(player)
-                    MusicLog.log.notice("Automation refused for \(player.name, privacy: .public)")
-                } else {
-                    deniedPlayers.remove(player)
-                }
-            }
-            if deniedPlayers.contains(player) { continue }
+            guard await ensurePermission(player) else { continue }
             switch await Self.read(player) {
             case .playing(let track): states[player] = track
             case .stopped: states[player] = nil
@@ -408,8 +424,9 @@ enum AppleScript {
         await withCheckedContinuation { continuation in
             queue.async {
                 let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
-                let any = code("****")
-                let status = AEDeterminePermissionToAutomateTarget(target.aeDesc, any, any, ask)
+                // A concrete event ("get data"): with wildcards macOS never shows the dialog
+                // and answers -1744, which looked like "allowed" while every command failed.
+                let status = AEDeterminePermissionToAutomateTarget(target.aeDesc, code("core"), code("getd"), ask)
                 continuation.resume(returning: status)
             }
         }
@@ -459,6 +476,18 @@ enum LyricsStore {
     private struct Response: Decodable {
         let syncedLyrics: String?
         let duration: Double?
+    }
+
+    /// Deletes every cached lyric file. Returns how many were removed.
+    @discardableResult
+    static func clearCache() -> Int {
+        let files = (try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil)) ?? []
+        files.forEach { try? FileManager.default.removeItem(at: $0) }
+        return files.count
+    }
+
+    static func cachedCount() -> Int {
+        (try? FileManager.default.contentsOfDirectory(atPath: cacheDir.path))?.count ?? 0
     }
 
     private static var cacheDir: URL {
