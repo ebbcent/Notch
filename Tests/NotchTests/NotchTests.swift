@@ -139,7 +139,10 @@ final class HookSocketTests: XCTestCase {
     func testRequestIsDroppedWhenTheHookGoesAway() throws {
         let path = tempSocketPath()
         let hungUp = expectation(description: "the app notices the hook left")
+        final class Keep: @unchecked Sendable { var connections: [HookConnection] = [] }
+        let keep = Keep() // the app keeps pending requests the same way
         let server = HookServer { _, connection in
+            keep.connections.append(connection)
             connection.onHangUp { hungUp.fulfill() }
         }
         XCTAssertTrue(server.start(path: path))
