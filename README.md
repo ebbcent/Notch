@@ -29,6 +29,13 @@ build, so macOS would ask again after each rebuild. Create a local certificate o
 
 `./build.sh run`, or open `/Applications/Notch.app`. The capsule icon in the menu bar holds the settings.
 
+## What works so far
+
+- **Step 1** – menu bar icon (no Dock icon), Theme menu (Dark Matte / White Matte), Quit.
+- **Step 2** – the island over the notch, in all spaces and in full screen. Rest the mouse on the notch for
+  0.25 s to open it; move away to close it; click it to keep it open (click again or click elsewhere to release).
+  The **Test** menu shows the compact pill, a peek, and opens/closes the island by hand.
+
 ## Remove
 
 ```sh
