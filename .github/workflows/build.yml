@@ -1,0 +1,19 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: ./build.sh
+      - run: plutil -lint build/Notch.app/Contents/Info.plist && codesign --verify --verbose build/Notch.app
+      - run: ditto -c -k --keepParent build/Notch.app Notch.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Notch
+          path: Notch.zip
