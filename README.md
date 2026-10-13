@@ -8,8 +8,11 @@ It lives in the menu bar, has no Dock icon, and starts at login only if you turn
   The black band of the real notch always stays black.
 - **Tiles** (show, hide, reorder from the menu): Music (Spotify / Apple Music, synced lyrics from LRCLIB),
   Weather (Open-Meteo), next Calendar event, 25-minute Focus timer.
+- **Click a tile** to open its app: Music → the player in use (Spotify or Music), Calendar → Calendar,
+  Weather → Weather, Focus timer → Clock. Buttons inside a tile keep their own action.
 - **Peeks**: app opened or quit, charger connected, battery at 20 % and 10 %, Focus (Do Not Disturb) on/off.
-- **Compact pill**: while the focus timer runs, a black pill beside the notch shows the time left.
+- **Live activity** (menu toggle): while music plays, the black pill beside the notch shows the cover and
+  moving bars, and a bubble shows each new track; while the focus timer runs, the pill shows the time left.
 
 Requires macOS 14 or later on Apple Silicon. On a Mac without a notch, a notch-sized island is drawn at the
 top centre of the main screen.

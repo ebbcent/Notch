@@ -72,6 +72,7 @@ final class IslandController {
             .environmentObject(weather)
             .environmentObject(calendar)
             .environmentObject(timer)
+            .environmentObject(model)
         let hosting = IslandHostingView(rootView: AnyView(root))
         hosting.sizingOptions = []
         panel.contentView = hosting

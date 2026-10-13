@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The open island: a row of tiles and, below, the current lyrics.
@@ -30,12 +31,64 @@ struct ExpandedView: View {
 struct Tile<Content: View>: View {
     let palette: Palette
     let width: CGFloat
+    /// The app a click on the tile opens (buttons inside keep their own action).
+    var opens: AppTarget?
     @ViewBuilder var content: Content
 
+    @EnvironmentObject var island: IslandModel
+    @State var hovered = false
+
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Layout.tileRadius, style: .continuous)
         content
             .frame(width: width, height: Layout.tileHeight)
-            .background(RoundedRectangle(cornerRadius: Layout.tileRadius, style: .continuous).fill(palette.tile))
+            .background(shape.fill(palette.tile))
+            // Flat hover feedback: a slightly lighter tile, no glow.
+            .overlay(shape.fill(palette.text.opacity(hovered && opens != nil ? 0.05 : 0)).allowsHitTesting(false))
+            .contentShape(shape)
+            .onHover { hovered = $0 }
+            .onTapGesture {
+                guard let opens else { return }
+                if AppLauncher.open(opens) { island.collapse() }
+            }
+            .help(opens.map { "Open \($0.name)" } ?? "")
+            .animation(.easeOut(duration: 0.12), value: hovered)
+    }
+}
+
+/// An app a tile opens, with fallbacks in order (the first one installed wins).
+struct AppTarget {
+    let name: String
+    let bundleIDs: [String]
+
+    static let calendar = AppTarget(name: "Calendar", bundleIDs: ["com.apple.iCal"])
+    static let clock = AppTarget(name: "Clock", bundleIDs: ["com.apple.clock"])
+    static let weather = AppTarget(name: "Weather", bundleIDs: ["com.apple.weather"])
+
+    static func player(_ player: Player) -> AppTarget {
+        AppTarget(name: player.name, bundleIDs: [player.rawValue])
+    }
+}
+
+@MainActor
+enum AppLauncher {
+    /// Opens (and brings to the front) the first installed app of the target.
+    /// Returns false, with a beep, if none is installed.
+    @discardableResult
+    static func open(_ target: AppTarget) -> Bool {
+        guard let url = target.bundleIDs.lazy
+            .compactMap({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }).first else {
+            NSSound.beep()
+            return false
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+        return true
+    }
+
+    static func isInstalled(_ bundleID: String) -> Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil
     }
 }
 
@@ -92,8 +145,18 @@ struct MusicTile: View {
     let palette: Palette
     @EnvironmentObject var music: MusicService
 
+    /// The player now playing; otherwise one that is running; otherwise Spotify if installed, else Music.
+    private var target: AppTarget {
+        if let player = music.nowPlaying?.player { return .player(player) }
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        if let player = [Player.spotify, .music].first(where: { running.contains($0.rawValue) }) {
+            return .player(player)
+        }
+        return AppLauncher.isInstalled(Player.spotify.rawValue) ? .player(.spotify) : .player(.music)
+    }
+
     var body: some View {
-        Tile(palette: palette, width: Layout.wideTile) {
+        Tile(palette: palette, width: Layout.wideTile, opens: target) {
             if let track = music.nowPlaying {
                 HStack(spacing: 10) {
                     cover
@@ -199,7 +262,7 @@ struct WeatherTile: View {
     @EnvironmentObject var weather: WeatherService
 
     var body: some View {
-        Tile(palette: palette, width: Layout.wideTile) {
+        Tile(palette: palette, width: Layout.wideTile, opens: .weather) {
             switch weather.status {
             case .ready(let now):
                 VStack(alignment: .leading, spacing: 0) {
@@ -256,7 +319,7 @@ struct CalendarTile: View {
     @EnvironmentObject var calendar: CalendarService
 
     var body: some View {
-        Tile(palette: palette, width: Layout.wideTile) {
+        Tile(palette: palette, width: Layout.wideTile, opens: .calendar) {
             switch calendar.status {
             case .event(let title, let start, let end, let allDay):
                 HStack(alignment: .top, spacing: 12) {
@@ -315,7 +378,7 @@ struct TimerTile: View {
     @EnvironmentObject var timer: FocusTimer
 
     var body: some View {
-        Tile(palette: palette, width: Layout.narrowTile) {
+        Tile(palette: palette, width: Layout.narrowTile, opens: .clock) {
             VStack(spacing: 7) {
                 Text(timer.label)
                     .font(.system(size: 17).monospacedDigit())
