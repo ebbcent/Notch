@@ -179,28 +179,19 @@ struct MusicTile: View {
                                         palette: palette)
                         }
                         .padding(.bottom, 4)
-                        if music.deniedPlayers.contains(track.player) {
-                            // Controls need the Automation permission the user refused.
-                            Button("Allow control in Settings…") { music.openAutomationSettings() }
-                                .buttonStyle(.plain)
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(palette.accent)
-                                .frame(height: 22)
-                        } else {
-                            HStack(spacing: 0) {
-                                IconButton(symbol: "backward.fill", size: 12, color: palette.text,
-                                           label: "Previous") { music.previous() }
-                                Spacer(minLength: 0)
-                                IconButton(symbol: track.isPlaying ? "pause.fill" : "play.fill", size: 14,
-                                           color: palette.text, label: track.isPlaying ? "Pause" : "Play") {
-                                    music.playPause()
-                                }
-                                Spacer(minLength: 0)
-                                IconButton(symbol: "forward.fill", size: 12, color: palette.text,
-                                           label: "Next") { music.next() }
+                        HStack(spacing: 0) {
+                            IconButton(symbol: "backward.fill", size: 12, color: palette.text,
+                                       label: "Previous") { music.previous() }
+                            Spacer(minLength: 0)
+                            IconButton(symbol: track.isPlaying ? "pause.fill" : "play.fill", size: 14,
+                                       color: palette.text, label: track.isPlaying ? "Pause" : "Play") {
+                                music.playPause()
                             }
-                            .padding(.horizontal, -6)
+                            Spacer(minLength: 0)
+                            IconButton(symbol: "forward.fill", size: 12, color: palette.text,
+                                       label: "Next") { music.next() }
                         }
+                        .padding(.horizontal, -6)
                     }
                     .lineLimit(1)
                     .frame(height: 64)

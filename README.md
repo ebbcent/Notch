@@ -40,6 +40,7 @@ Each one is asked only when the feature that needs it is first used:
 | Automation → Spotify / Music | the island first opens while that player runs, or you first press a control | play/pause/next, exact position for the lyrics, Music covers |
 | Calendar (full access) | the island first opens with the Calendar tile shown | show your next event |
 | Focus | you turn on **Do Not Disturb bubbles** | know when a Focus turns on or off |
+| Accessibility | you press a music button while Automation is not allowed | send the keyboard's play/pause/next keys instead |
 
 Detecting what plays needs **no** permission: Spotify and Music broadcast every track change and
 play/pause, and Notch listens to that. The app never launches Spotify or Music by itself (clicking the
@@ -74,7 +75,9 @@ signed ad-hoc and still works.
 ## Troubleshooting
 
 **Play/pause/next do nothing, or no Music cover.** macOS must let Notch control the player. Start the
-player, open **Settings › Music**, click **Reset and Ask Again** and accept the dialog. The status shows
+player, open **Settings › Music**, click **Reset and Ask Again** and accept the dialog. If macOS never
+asks, the buttons fall back to the media keys: allow Notch in System Settings › Privacy & Security ›
+Accessibility (the **Allow…** button opens it). The status shows
 what macOS answers (Allowed / Refused / Not asked yet) and the last error. Builds signed ad-hoc used to
 change signature at every build, and macOS then silently refused the permission given to the previous
 build; builds now keep it.

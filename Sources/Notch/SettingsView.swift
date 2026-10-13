@@ -165,6 +165,7 @@ private struct MusicPane: View {
     @ObservedObject var settings: Settings
     @ObservedObject var music: MusicService
     @State private var working = false
+    @State private var mediaKeysAllowed = MediaKeys.isAllowed
 
     private func statusText(_ player: Player) -> String {
         guard let status = music.permissionStatus[player] else { return "–" }
@@ -204,6 +205,15 @@ private struct MusicPane: View {
                     }
                 }
                 HStack {
+                    Text("Media keys (fallback for the buttons)")
+                    Spacer()
+                    if mediaKeysAllowed {
+                        Text("Allowed").foregroundStyle(.green)
+                    } else {
+                        Button("Allow…") { MediaKeys.requestPermission() }
+                    }
+                }
+                HStack {
                     Button(working ? "Asking…" : "Reset and Ask Again") {
                         working = true
                         Task {
@@ -219,7 +229,7 @@ private struct MusicPane: View {
             } header: {
                 Text("Control of the players")
             } footer: {
-                Text("Detecting what plays needs no permission. Play/pause/next, the lyrics position and Music covers need macOS to let Notch control the player. If they do nothing, start the player, click Reset and Ask Again, and accept the dialog. Notch never opens a player by itself.")
+                Text("Detecting what plays needs no permission. The lyrics position and Music covers need macOS to let Notch control the player (Automation): start the player, click Reset and Ask Again, and accept the dialog. If macOS does not ask, the buttons still work through the media keys, which need Accessibility. Notch never opens a player by itself.")
             }
             Section {
                 Toggle("Show Spotify covers", isOn: $settings.spotifyCovers)
@@ -228,7 +238,14 @@ private struct MusicPane: View {
             }
         }
         .formStyle(.grouped)
-        .task { await music.checkPermissions() }
+        .task {
+            await music.checkPermissions()
+            // Accessibility is granted in System Settings: keep the status current.
+            while !Task.isCancelled {
+                mediaKeysAllowed = MediaKeys.isAllowed
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 }
 

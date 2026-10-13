@@ -129,20 +129,31 @@ final class MusicService: ObservableObject {
 
     // MARK: Controls
 
-    func playPause() { send("playpause") }
-    func next() { send("next track") }
-    func previous() { send("previous track") }
+    func playPause() { send("playpause", key: .playPause) }
+    func next() { send("next track", key: .next) }
+    func previous() { send("previous track", key: .previous) }
 
-    private func send(_ command: String) {
+    /// AppleScript when macOS lets Notch control the player; otherwise the keyboard's media
+    /// keys, which work with Spotify and Music alike (they need the Accessibility permission,
+    /// whose dialog macOS always shows).
+    private func send(_ command: String, key: MediaKeys.Key) {
         guard let player = nowPlaying?.player else { return }
         Task {
-            guard runningPlayers().contains(player), await ensurePermission(player) else { return }
+            guard runningPlayers().contains(player) else { return }
+            guard await ensurePermission(player) else {
+                if MediaKeys.press(key) {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    await refresh()
+                }
+                return
+            }
             let result = await AppleScript.run(AppleScript.ifRunning(player.rawValue,
                 "tell application id \"\(player.rawValue)\" to \(command)"))
             lastError[player] = result.error
             if let error = result.error {
                 MusicLog.log.error("\(player.name, privacy: .public) \(command, privacy: .public) failed: \(error, privacy: .public)")
                 if error.hasPrefix("-1743") { deniedPlayers.insert(player) }
+                MediaKeys.press(key) // still do what was asked
                 return
             }
             try? await Task.sleep(for: .milliseconds(250))
@@ -673,5 +684,42 @@ final class BroadcastListener: NSObject {
         } else {
             DispatchQueue.main.async { MainActor.assumeIsolated { handler(name, info.value) } }
         }
+    }
+}
+
+/// The keyboard's play/pause, next and previous keys, posted as system events. macOS sends
+/// them to the app that is playing. Posting needs the Accessibility permission.
+@MainActor
+enum MediaKeys {
+    enum Key: Int32 {
+        case playPause = 16 // NX_KEYTYPE_PLAY
+        case next = 17      // NX_KEYTYPE_NEXT
+        case previous = 18  // NX_KEYTYPE_PREVIOUS
+    }
+
+    static var isAllowed: Bool { AXIsProcessTrusted() }
+
+    /// Shows the system dialog that leads to Accessibility settings (if not allowed yet).
+    static func requestPermission() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+    }
+
+    /// Returns false (after asking for the permission) if Notch may not post the key.
+    @discardableResult
+    static func press(_ key: Key) -> Bool {
+        guard isAllowed else {
+            requestPermission()
+            return false
+        }
+        for down in [true, false] {
+            let flags = NSEvent.ModifierFlags(rawValue: down ? 0xA00 : 0xB00)
+            let data1 = Int((key.rawValue << 16) | ((down ? 0xA : 0xB) << 8))
+            let event = NSEvent.otherEvent(with: .systemDefined, location: .zero, modifierFlags: flags,
+                                           timestamp: 0, windowNumber: 0, context: nil,
+                                           subtype: 8, data1: data1, data2: -1)
+            event?.cgEvent?.post(tap: .cghidEventTap)
+        }
+        return true
     }
 }
