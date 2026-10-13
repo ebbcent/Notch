@@ -13,7 +13,8 @@ It lives in the menu bar, has no Dock icon, and starts at login only if you turn
 - **Peeks**: app opened or quit, charger connected, battery at 20 % and 10 %, Focus (Do Not Disturb) on/off.
 - **Live activity**: while music plays, the black pill beside the notch shows the cover and the title (cut
   with "…" if long) on the left and moving bars on the right, and a bubble shows each new track. While the
-  focus timer runs, the pill shows the time left.
+  focus timer runs, the pill shows the time left. The pill lets clicks through: the menu bar items under it
+  stay usable, and only the notch itself opens the island.
 
 Requires macOS 14 or later on Apple Silicon. On a Mac without a notch, a notch-sized island is drawn at the
 top centre of the main screen.
