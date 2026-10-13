@@ -35,7 +35,15 @@ else
     SIGN="-"
     echo "warning: no \"$IDENTITY\" certificate found, signing ad-hoc (see README)."
 fi
-codesign --force --sign "$SIGN" --identifier "$BUNDLE_ID" "$APP"
+if [[ "$SIGN" == "-" ]]; then
+    # An ad-hoc signature changes with every build, and macOS then silently refuses the
+    # Automation permission granted to the previous build. Pinning the designated
+    # requirement to the bundle id keeps permissions across builds.
+    codesign --force --sign - --identifier "$BUNDLE_ID" \
+        --requirements "=designated => identifier \"$BUNDLE_ID\"" "$APP"
+else
+    codesign --force --sign "$SIGN" --identifier "$BUNDLE_ID" "$APP"
+fi
 echo "Built $APP (signed with: $SIGN)"
 
 if [[ "${1:-}" == "run" ]]; then

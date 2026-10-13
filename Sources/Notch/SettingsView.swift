@@ -164,24 +164,62 @@ private struct TilesPane: View {
 private struct MusicPane: View {
     @ObservedObject var settings: Settings
     @ObservedObject var music: MusicService
+    @State private var working = false
+
+    private func statusText(_ player: Player) -> String {
+        switch music.permissionStatus[player] {
+        case noErr?: return "Allowed"
+        case -1743?: return "Refused"
+        case -1744?: return "Not asked yet"
+        case -600?: return "Not running"
+        case let code?: return "Error \(code)"
+        case nil: return "–"
+        }
+    }
+
+    private func statusColor(_ player: Player) -> Color {
+        switch music.permissionStatus[player] {
+        case noErr?: return .green
+        case -1743?: return .orange
+        default: return .secondary
+        }
+    }
 
     var body: some View {
         Form {
-            Section("Players") {
+            Section {
                 ForEach([Player.spotify, .music], id: \.self) { player in
-                    HStack {
-                        Text(player.name)
-                        Spacer()
-                        if music.deniedPlayers.contains(player) {
-                            Text("Control not allowed").foregroundStyle(.orange)
-                        } else {
-                            Text("Detected automatically").foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(player.name)
+                            Spacer()
+                            Text(statusText(player)).foregroundStyle(statusColor(player))
+                        }
+                        if let error = music.lastError[player] {
+                            Text("Last error: \(error)")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
                         }
                     }
                 }
-                Button("Open Automation Settings…") { music.openAutomationSettings() }
-                Text("Notch never opens a player by itself. Play/pause/next and the lyrics position need the Automation permission, asked the first time you open the island while a player runs.")
-                    .font(.callout).foregroundStyle(.secondary)
+                HStack {
+                    Button(working ? "Asking…" : "Reset and Ask Again") {
+                        working = true
+                        Task {
+                            await music.resetAutomationPermission()
+                            await music.checkPermissions()
+                            working = false
+                        }
+                    }
+                    .disabled(working)
+                    Spacer()
+                    Button("Open Automation Settings…") { music.openAutomationSettings() }
+                }
+            } header: {
+                Text("Control of the players")
+            } footer: {
+                Text("Detecting what plays needs no permission. Play/pause/next, the lyrics position and Music covers need macOS to let Notch control the player. If they do nothing, start the player, click Reset and Ask Again, and accept the dialog. Notch never opens a player by itself.")
             }
             Section {
                 Toggle("Show Spotify covers", isOn: $settings.spotifyCovers)
@@ -190,6 +228,7 @@ private struct MusicPane: View {
             }
         }
         .formStyle(.grouped)
+        .task { await music.checkPermissions() }
     }
 }
 

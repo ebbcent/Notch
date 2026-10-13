@@ -60,6 +60,9 @@ final class MusicService: ObservableObject {
     /// Players the user refused Automation for (the tile says how to allow it).
     @Published private(set) var deniedPlayers: Set<Player> = []
     var deniedPlayer: Player? { deniedPlayers.first }
+    /// What macOS last answered for each player, and the last script error (Settings › Music).
+    @Published private(set) var permissionStatus: [Player: OSStatus] = [:]
+    @Published private(set) var lastError: [Player: String] = [:]
 
     /// Called when a new track starts playing (for the live activity bubble).
     var onTrackStart: (NowPlaying) -> Void = { _ in }
@@ -136,6 +139,7 @@ final class MusicService: ObservableObject {
             guard runningPlayers().contains(player), await ensurePermission(player) else { return }
             let result = await AppleScript.run(AppleScript.ifRunning(player.rawValue,
                 "tell application id \"\(player.rawValue)\" to \(command)"))
+            lastError[player] = result.error
             if let error = result.error {
                 MusicLog.log.error("\(player.name, privacy: .public) \(command, privacy: .public) failed: \(error, privacy: .public)")
                 if error.hasPrefix("-1743") { deniedPlayers.insert(player) }
@@ -155,6 +159,7 @@ final class MusicService: ObservableObject {
         if !checkedPermission.contains(player) {
             checkedPermission.insert(player)
             let status = await AppleScript.automationPermission(for: player.rawValue, ask: true)
+            permissionStatus[player] = status
             MusicLog.log.notice("Automation for \(player.name, privacy: .public): \(status)")
             if status == noErr {
                 deniedPlayers.remove(player)
@@ -165,6 +170,39 @@ final class MusicService: ObservableObject {
             }
         }
         return !deniedPlayers.contains(player)
+    }
+
+    /// Clears what macOS remembers about Notch controlling the players (it can hold an
+    /// answer given to an older build and refuse silently), then asks again.
+    func resetAutomationPermission() async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        process.arguments = ["reset", "AppleEvents", Bundle.main.bundleIdentifier ?? "local.notch.island"]
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            MusicLog.log.error("tccutil failed: \(error.localizedDescription, privacy: .public)")
+        }
+        checkedPermission.removeAll()
+        deniedPlayers.removeAll()
+        permissionStatus.removeAll()
+        lastError.removeAll()
+        for player in runningPlayers() { _ = await ensurePermission(player) }
+        await refresh()
+        artworkTrack = nil
+        publish()
+    }
+
+    /// Reads the current answer without asking (Settings › Music).
+    func checkPermissions() async {
+        for player in [Player.spotify, .music] {
+            guard runningPlayers().contains(player) else {
+                permissionStatus[player] = -600
+                continue
+            }
+            permissionStatus[player] = await AppleScript.automationPermission(for: player.rawValue, ask: false)
+        }
     }
 
     func openAutomationSettings() {
@@ -226,10 +264,17 @@ final class MusicService: ObservableObject {
         for player in running {
             guard await ensurePermission(player, prompt: prompt) else { continue }
             switch await Self.read(player) {
-            case .playing(let track): states[player] = track
-            case .stopped: states[player] = nil
-            case .denied: deniedPlayers.insert(player)
-            case .failed: break // keep what the broadcasts said
+            case .playing(let track):
+                states[player] = track
+                lastError[player] = nil
+            case .stopped:
+                states[player] = nil
+                lastError[player] = nil
+            case .denied(let error):
+                deniedPlayers.insert(player)
+                lastError[player] = error
+            case .failed(let error):
+                lastError[player] = error // keep what the broadcasts said
             }
         }
         publish()
@@ -262,7 +307,7 @@ final class MusicService: ObservableObject {
         if startedNewTrack { onTrackStart(current) }
     }
 
-    private enum ReadResult { case playing(NowPlaying), stopped, denied, failed }
+    private enum ReadResult { case playing(NowPlaying), stopped, denied(String), failed(String) }
 
     private static func read(_ player: Player) async -> ReadResult {
         let source: String
@@ -293,15 +338,15 @@ final class MusicService: ObservableObject {
         let result = await AppleScript.run(AppleScript.ifRunning(player.rawValue, source))
         if let error = result.error {
             MusicLog.log.error("\(player.name, privacy: .public) script failed: \(error, privacy: .public)")
-            return error.hasPrefix("-1743") ? .denied : .failed
+            return error.hasPrefix("-1743") ? .denied(error) : .failed(error)
         }
         let values = result.values
-        guard case .text(let rawState)? = values.first else { return .failed }
+        guard case .text(let rawState)? = values.first else { return .failed("unexpected answer") }
         // Spotify can report its state as a raw constant (kPSP = playing, kPSp = paused).
         let state = rawState.lowercased()
         let playing = state == "playing" || rawState.contains("kPSP")
         if state == "stopped" || rawState.contains("kPSS") { return .stopped }
-        guard values.count >= 7 else { return .failed }
+        guard values.count >= 7 else { return .failed("unexpected answer (\(values.count) values)") }
         let id = values[6].string
         let normalizedID: String
         switch player {

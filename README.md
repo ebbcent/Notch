@@ -71,6 +71,19 @@ ask again after each rebuild. Create a local certificate once:
 `build.sh` uses it automatically (or set `NOTCH_SIGN_IDENTITY` to another name). Without it, the app is
 signed ad-hoc and still works.
 
+## Troubleshooting
+
+**Play/pause/next do nothing, or no Music cover.** macOS must let Notch control the player. Start the
+player, open **Settings › Music**, click **Reset and Ask Again** and accept the dialog. The status shows
+what macOS answers (Allowed / Refused / Not asked yet) and the last error. Builds signed ad-hoc used to
+change signature at every build, and macOS then silently refused the permission given to the previous
+build; builds now keep it.
+
+**No Spotify cover.** Spotify covers are off by default (they come from Spotify's servers): turn on
+**Show Spotify covers** in Settings › Music.
+
+**Logs.** Console.app, search `local.notch.island` (local only).
+
 ## Settings
 
 The capsule in the menu bar: **Open Island**, **Live Activity**, **Theme**, **Settings… (⌘,)**, **Quit**.
