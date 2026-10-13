@@ -35,6 +35,22 @@ build, so macOS would ask again after each rebuild. Create a local certificate o
 - **Step 2** – the island over the notch, in all spaces and in full screen. Rest the mouse on the notch for
   0.25 s to open it; move away to close it; click it to keep it open (click again or click elsewhere to release).
   The **Test** menu shows the compact pill, a peek, and opens/closes the island by hand.
+- **Step 3** – the tiles:
+  - **Music** – Spotify or Music (only if already running; never launched). Cover, title, artist, progress,
+    previous / play-pause / next, and the current lyric line under the tiles, synced, from LRCLIB.
+    Lyrics are cached in `~/Library/Caches/local.notch.island/lyrics`. macOS asks for the Automation
+    permission once per player, the first time the island opens while that player runs.
+    Spotify only exposes a cover *URL*, so Spotify covers are off unless you tick
+    **Spotify Covers** in the menu (that is a request to Spotify's servers).
+  - **Weather** – Open-Meteo, for the city set in **Weather City…** (refreshed every 30 min while you open the island).
+  - **Calendar** – next event (EventKit). Access is asked the first time the island opens.
+  - **Focus timer** – 25 min, start/pause and reset; a bubble and a sound when it ends.
+
+## Network
+
+Only these requests leave the Mac: `lrclib.net` (title, artist, album, duration of the current track),
+`geocoding-api.open-meteo.com` and `api.open-meteo.com` (the city name and its coordinates), and, only if you
+turn it on, the Spotify cover image.
 
 ## Remove
 
