@@ -167,20 +167,20 @@ private struct MusicPane: View {
     @State private var working = false
 
     private func statusText(_ player: Player) -> String {
-        switch music.permissionStatus[player] {
-        case noErr?: return "Allowed"
-        case -1743?: return "Refused"
-        case -1744?: return "Not asked yet"
-        case -600?: return "Not running"
-        case let code?: return "Error \(code)"
-        case nil: return "–"
+        guard let status = music.permissionStatus[player] else { return "–" }
+        switch Int(status) {
+        case 0: return "Allowed"
+        case -1743: return "Refused"
+        case -1744: return "Not asked yet"
+        case -600: return "Not running"
+        default: return "Error \(status)"
         }
     }
 
     private func statusColor(_ player: Player) -> Color {
-        switch music.permissionStatus[player] {
-        case noErr?: return .green
-        case -1743?: return .orange
+        switch music.permissionStatus[player].map(Int.init) {
+        case 0: return .green
+        case -1743: return .orange
         default: return .secondary
         }
     }
