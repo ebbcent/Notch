@@ -24,6 +24,11 @@ enum HookSocket {
         return addr
     }
 
+    /// A write to a hook that already hung up must fail with EPIPE, not kill the process.
+    static func ignoreBrokenPipes() {
+        signal(SIGPIPE, SIG_IGN)
+    }
+
     static func setTimeouts(_ fd: Int32, receive: TimeInterval, send: TimeInterval) {
         func tv(_ t: TimeInterval) -> timeval {
             timeval(tv_sec: Int(t), tv_usec: Int32((t - floor(t)) * 1_000_000))
@@ -80,6 +85,7 @@ enum HookClient {
               let event = json["hook_event_name"] as? String,
               var addr = HookSocket.address(path) else { return nil }
         let waits = event == "PermissionRequest"
+        HookSocket.ignoreBrokenPipes()
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return nil }
@@ -126,15 +132,21 @@ final class HookConnection: @unchecked Sendable {
 
     init(fd: Int32) { self.fd = fd }
 
+    /// Sends the answer ("allow" / "deny") and closes.
     func reply(_ answer: String) {
+        finish(with: Data((answer + "\n").utf8))
+    }
+
+    /// Closes without an answer: the hook then prints nothing.
+    func close() { finish(with: nil) }
+
+    private func finish(with data: Data?) {
         lock.lock(); defer { lock.unlock() }
         guard open else { return }
         open = false
-        _ = HookSocket.writeAll(fd, Data((answer + "\n").utf8))
+        if let data { _ = HookSocket.writeAll(fd, data) } // the hook may be gone: EPIPE, not a signal
         Darwin.close(fd)
     }
-
-    func close() { reply("") }
 
     deinit { if open { Darwin.close(fd) } }
 }
@@ -156,6 +168,7 @@ final class HookServer: @unchecked Sendable {
 
     func start(path: String = HookSocket.path) -> Bool {
         self.path = path
+        HookSocket.ignoreBrokenPipes()
         let fm = FileManager.default
         let directory = (path as NSString).deletingLastPathComponent
         try? fm.createDirectory(atPath: directory, withIntermediateDirectories: true,
