@@ -45,6 +45,11 @@ final class Settings: ObservableObject {
         didSet { defaults.set(focusPeeks, forKey: "focusPeeks") }
     }
 
+    /// Live activity: the compact pill while music plays, and a bubble when a track starts.
+    @Published var liveActivity: Bool {
+        didSet { defaults.set(liveActivity, forKey: "liveActivity") }
+    }
+
     var visibleTiles: [TileKind] { tileOrder.filter { !hiddenTiles.contains($0) } }
 
     func isVisible(_ tile: TileKind) -> Bool { !hiddenTiles.contains(tile) }
@@ -64,5 +69,6 @@ final class Settings: ObservableObject {
         hiddenTiles = Set((defaults.stringArray(forKey: "hiddenTiles") ?? []).compactMap(TileKind.init(rawValue:)))
         spotifyCovers = defaults.bool(forKey: "spotifyCovers")
         focusPeeks = defaults.bool(forKey: "focusPeeks")
+        liveActivity = defaults.object(forKey: "liveActivity") as? Bool ?? true
     }
 }

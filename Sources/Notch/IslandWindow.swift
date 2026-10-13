@@ -107,11 +107,18 @@ final class IslandController {
             .sink { [weak self] _ in self?.contentChanged() }
             .store(in: &cancellables)
 
-        timer.$isRunning
-            .removeDuplicates()
+        // Live activities keep the compact pill out: the focus timer, or music playing.
+        timer.$isRunning.map { _ in () }
+            .merge(with: music.$nowPlaying.map { _ in () }, settings.$liveActivity.map { _ in () })
             .receive(on: main)
-            .sink { [weak self] running in self?.model.compactActive = running }
+            .sink { [weak self] in self?.syncLiveActivity() }
             .store(in: &cancellables)
+
+        music.onTrackStart = { [weak self] track in
+            guard let self, self.settings.liveActivity, self.model.state != .expanded else { return }
+            self.model.showPeek(Peek(symbol: "music.note", icon: self.music.artwork,
+                                     title: track.title, subtitle: track.artist), seconds: 3)
+        }
 
         // The window follows the island's size (see fitWindow).
         Publishers.MergeMany(model.$state.map { _ in () }.eraseToAnyPublisher(),
@@ -121,6 +128,11 @@ final class IslandController {
             .receive(on: main)
             .sink { [weak self] in self?.fitWindow() }
             .store(in: &cancellables)
+    }
+
+    private func syncLiveActivity() {
+        let musicPlaying = settings.liveActivity && music.nowPlaying?.isPlaying == true
+        model.compactActive = timer.isRunning || musicPlaying
     }
 
     private func syncLayout() {

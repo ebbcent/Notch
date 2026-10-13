@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item(cityTitle, #selector(askCity)))
         menu.addItem(item("Spotify Covers (asks Spotify's servers)", #selector(toggleCovers),
                           on: settings.spotifyCovers))
+        menu.addItem(item("Live Activity (music, timer)", #selector(toggleLiveActivity), on: settings.liveActivity))
         menu.addItem(item("Do Not Disturb Bubbles" + (settings.focusPeeks ? "" : FocusAccess.menuNote),
                           #selector(toggleFocusPeeks), on: settings.focusPeeks))
 
@@ -130,6 +131,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleCovers() {
         settings.spotifyCovers.toggle()
+    }
+
+    @objc private func toggleLiveActivity() {
+        settings.liveActivity.toggle()
     }
 
     @objc private func toggleFocusPeeks() {

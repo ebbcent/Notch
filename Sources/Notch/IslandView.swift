@@ -67,7 +67,7 @@ struct IslandView: View {
         case .resting:
             Color.clear
         case .compact:
-            TimerCompactView(palette: palette, notchSize: notch)
+            LiveActivityView(palette: palette, notchSize: notch)
                 .transition(.opacity)
         case .peek:
             if let peek = model.peek {
@@ -84,28 +84,80 @@ struct IslandView: View {
     }
 }
 
-/// Black pill beside the notch while the focus timer runs: an icon and the minutes left.
-struct TimerCompactView: View {
+/// Live activity in the black pill beside the notch: the focus timer while it runs,
+/// otherwise the music playing (cover on the left, moving bars on the right).
+struct LiveActivityView: View {
     let palette: Palette
     let notchSize: CGSize
     @EnvironmentObject var timer: FocusTimer
+    @EnvironmentObject var music: MusicService
 
     var body: some View {
         HStack(spacing: 0) {
+            leading.frame(width: Layout.compactSide)
+            Spacer().frame(width: notchSize.width)
+            trailing.frame(width: Layout.compactSide)
+        }
+        .frame(height: notchSize.height)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    @ViewBuilder private var leading: some View {
+        if timer.isRunning {
             Image(systemName: "timer")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(palette.accent)
-                .frame(width: Layout.compactSide)
-            Spacer().frame(width: notchSize.width)
+        } else if let artwork = music.artwork {
+            Image(nsImage: artwork)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 20, height: 20)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        } else {
+            Image(systemName: "music.note")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(palette.accent)
+        }
+    }
+
+    @ViewBuilder private var trailing: some View {
+        if timer.isRunning {
             Text(timer.label)
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundStyle(palette.accent)
                 .minimumScaleFactor(0.8)
-                .frame(width: Layout.compactSide)
+        } else {
+            EqualizerBars(color: palette.accent, playing: music.nowPlaying?.isPlaying == true)
         }
-        .frame(height: notchSize.height)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Focus timer, \(timer.label) left")
+    }
+
+    private var accessibilityText: String {
+        if timer.isRunning { return "Focus timer, \(timer.label) left" }
+        if let track = music.nowPlaying { return "Playing \(track.title) by \(track.artist)" }
+        return ""
+    }
+}
+
+/// Four bars moving like a level meter (flat, accent colour).
+struct EqualizerBars: View {
+    let color: Color
+    let playing: Bool
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 24, paused: !playing)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: 2) {
+                ForEach(0..<4, id: \.self) { i in
+                    let phase = t * (5 + Double(i) * 1.3) + Double(i) * 1.7
+                    let level = playing ? 0.35 + 0.65 * abs(sin(phase)) : 0.3
+                    Capsule()
+                        .fill(color)
+                        .frame(width: 2.5, height: 12 * level)
+                }
+            }
+            .frame(height: 12)
+        }
     }
 }
 

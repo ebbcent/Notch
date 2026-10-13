@@ -21,6 +21,36 @@ final class LyricsTests: XCTestCase {
     }
 }
 
+final class PlayerBroadcastTests: XCTestCase {
+    func testSpotifyBroadcast() throws {
+        let info: [AnyHashable: Any] = ["Player State": "Playing", "Name": "Low Tide", "Artist": "Nova Lane",
+                                        "Album": "Shore", "Track ID": "spotify:track:abc",
+                                        "Duration": NSNumber(value: 215_000), "Playback Position": NSNumber(value: 12.5)]
+        let track = try XCTUnwrap(MusicService.track(from: info, player: .spotify, previous: nil))
+        XCTAssertTrue(track.isPlaying)
+        XCTAssertEqual(track.title, "Low Tide")
+        XCTAssertEqual(track.duration, 215, accuracy: 0.001)
+        XCTAssertEqual(track.position, 12.5, accuracy: 0.001)
+        XCTAssertEqual(track.trackID, "com.spotify.client:spotify:track:abc")
+    }
+
+    func testMusicBroadcastKeepsPositionForSameTrack() throws {
+        let info: [AnyHashable: Any] = ["Player State": "Paused", "Name": "Song", "Artist": "A",
+                                        "PersistentID": NSNumber(value: Int64(-2)), "Total Time": NSNumber(value: 180_000)]
+        let first = try XCTUnwrap(MusicService.track(from: info, player: .music, previous: nil))
+        XCTAssertFalse(first.isPlaying)
+        XCTAssertEqual(first.trackID, "com.apple.Music:fffffffffffffffe")
+        var moved = first
+        moved.position = 42
+        let second = try XCTUnwrap(MusicService.track(from: info, player: .music, previous: moved))
+        XCTAssertEqual(second.position, 42, accuracy: 0.001)
+    }
+
+    func testStoppedMeansNothingPlaying() {
+        XCTAssertNil(MusicService.track(from: ["Player State": "Stopped"], player: .spotify, previous: nil))
+    }
+}
+
 final class WeatherTests: XCTestCase {
     func testSymbols() {
         func symbol(_ code: Int, day: Bool = true) -> String {
