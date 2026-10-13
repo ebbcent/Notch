@@ -18,6 +18,7 @@ enum Layout {
     static let compactSide: CGFloat = 38          // each side of the notch (peek minimum)
     static let timerSide: CGFloat = 44            // live activity: focus timer
     static let musicSide: CGFloat = 112           // live activity: cover + title | bars
+    static let pillEar: CGFloat = 6
     static let peekExtraHeight: CGFloat = 40
     static let peekMinWidth: CGFloat = 300
 
@@ -72,6 +73,8 @@ struct Peek: Equatable {
     var icon: NSImage?
     var title: String
     var subtitle: String?
+    /// A "now playing" bubble: shows the cover as soon as it is loaded.
+    var music = false
 }
 
 @MainActor
@@ -103,16 +106,14 @@ final class IslandModel: ObservableObject {
 
     var earRadius: CGFloat {
         switch state {
-        case .resting: return 0
-        case .compact: return 6
+        case .resting, .compact: return 0
         case .peek, .expanded: return Layout.maxEar
         }
     }
 
     var bottomRadius: CGFloat {
         switch state {
-        case .resting: return Layout.notchRadius
-        case .compact: return 12
+        case .resting, .compact: return Layout.notchRadius
         case .peek: return 18
         case .expanded: return 24
         }
@@ -123,10 +124,10 @@ final class IslandModel: ObservableObject {
         let n = geometry.notchSize
         let ears = 2 * earRadius
         switch state {
-        case .resting:
+        case .resting, .compact:
+            // The live activity pill is drawn in its own click-through window (see PillView),
+            // so the island itself stays notch-sized and the menu bar beside it stays usable.
             return n
-        case .compact:
-            return CGSize(width: n.width + 2 * compactSide + ears, height: n.height)
         case .peek:
             return CGSize(width: max(n.width + 2 * Layout.compactSide, Layout.peekMinWidth) + ears,
                           height: n.height + Layout.peekExtraHeight)
@@ -146,6 +147,12 @@ final class IslandModel: ObservableObject {
         // edge because the pointer can report y == screen top.
         let margin: CGFloat = (state == .resting || state == .compact) ? Layout.hoverMargin : 0
         return CGRect(x: body.minX - margin, y: body.minY, width: body.width + 2 * margin, height: body.height + 2)
+    }
+
+    /// The live activity pill beside the notch.
+    var pillSize: CGSize {
+        let n = geometry.notchSize
+        return CGSize(width: n.width + 2 * (compactSide + Layout.pillEar), height: n.height)
     }
 
     /// Whether the window needs room around the island for the shadow.

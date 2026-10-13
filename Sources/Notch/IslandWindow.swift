@@ -45,6 +45,8 @@ final class MouseTracker: NSResponder {
 final class IslandController {
     let model: IslandModel
     private let panel: IslandPanel
+    /// Click-through window under the island for the live activity pill.
+    private let pillPanel: IslandPanel
     private let tracker: MouseTracker
     private var monitors: [Any] = []
     private var observers: [NSObjectProtocol] = []
@@ -63,6 +65,8 @@ final class IslandController {
         self.calendar = calendar
         self.timer = timer
         panel = IslandPanel.make()
+        pillPanel = IslandPanel.make()
+        pillPanel.ignoresMouseEvents = true
         tracker = MouseTracker()
         let screen = NotchGeometry.preferredScreen()
         model = IslandModel(geometry: screen.map { NotchGeometry(screen: $0) } ?? .fallback)
@@ -76,6 +80,13 @@ final class IslandController {
         let hosting = IslandHostingView(rootView: AnyView(root))
         hosting.sizingOptions = []
         panel.contentView = hosting
+
+        let pill = NSHostingView(rootView: AnyView(PillView()
+            .environmentObject(music)
+            .environmentObject(timer)
+            .environmentObject(model)))
+        pill.sizingOptions = []
+        pillPanel.contentView = pill
 
         // Tracking area on the panel itself (the menu bar is not ours to track).
         tracker.onMove = { [weak self] in
@@ -117,8 +128,8 @@ final class IslandController {
 
         music.onTrackStart = { [weak self] track in
             guard let self, self.settings.liveActivity, self.model.state != .expanded else { return }
-            self.model.showPeek(Peek(symbol: "music.note", icon: self.music.artwork,
-                                     title: track.title, subtitle: track.artist), seconds: 3)
+            self.model.showPeek(Peek(symbol: "music.note", title: track.title, subtitle: track.artist,
+                                     music: true), seconds: 3)
         }
 
         // The window follows the island's size (see fitWindow).
@@ -158,6 +169,16 @@ final class IslandController {
         let geometry = NotchGeometry(screen: screen)
         if geometry != model.geometry { model.geometry = geometry }
         fitWindow(immediately: true)
+        let g = model.geometry
+        let pillWidth = g.notchSize.width + 2 * (Layout.musicSide + Layout.pillEar) + 2
+        pillPanel.setFrame(CGRect(x: (g.screenFrame.midX - pillWidth / 2).rounded(), y: g.screenFrame.maxY - g.notchSize.height,
+                                  width: pillWidth.rounded(), height: g.notchSize.height), display: true)
+        orderFront()
+    }
+
+    /// The pill window right under the island window.
+    private func orderFront() {
+        pillPanel.orderFrontRegardless()
         panel.orderFrontRegardless()
     }
 
@@ -205,9 +226,13 @@ final class IslandController {
 
         if let m = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown], handler: { [weak self] event in
             MainActor.assumeIsolated {
-                // A click keeps the island open.
-                if let self, event.window === self.panel, self.model.hotRect.contains(NSEvent.mouseLocation) {
-                    self.model.click()
+                guard let self else { return }
+                if event.window === self.panel {
+                    // A click keeps the island open.
+                    if self.model.hotRect.contains(NSEvent.mouseLocation) { self.model.click() }
+                } else {
+                    // A click in one of Notch's own windows (Settings) releases it too.
+                    self.model.clickOutside()
                 }
             }
             return event
@@ -220,7 +245,7 @@ final class IslandController {
         })
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.panel.orderFrontRegardless() }
+            MainActor.assumeIsolated { self?.orderFront() }
         })
     }
 

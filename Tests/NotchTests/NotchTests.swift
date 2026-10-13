@@ -75,7 +75,10 @@ final class IslandModelTests: XCTestCase {
 
         model.compactActive = true
         XCTAssertEqual(model.state, .compact)
-        XCTAssertGreaterThan(model.size.width, notch.width)
+        // The pill lives in its own click-through window; the island stays notch-sized.
+        XCTAssertEqual(model.size, notch)
+        model.compactSide = Layout.musicSide
+        XCTAssertEqual(model.pillSize.width, notch.width + 2 * (Layout.musicSide + Layout.pillEar))
 
         model.showPeek(Peek(symbol: "bolt.fill", title: "Charging"), seconds: 10)
         XCTAssertEqual(model.state, .peek)

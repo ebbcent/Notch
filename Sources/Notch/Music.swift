@@ -1,6 +1,7 @@
 import AppKit
 import Carbon
 import CryptoKit
+import Combine
 import os
 
 enum MusicLog {
@@ -71,17 +72,17 @@ final class MusicService: ObservableObject {
     private var artworkTrack: String?
     private var lyricsTrack: String?
     private var observers: [NSObjectProtocol] = []
+    private var broadcasts: BroadcastListener?
+    private var lyricsFailedTrack: String?
+    private var coversObserver: AnyCancellable?
 
     init(settings: Settings) {
         self.settings = settings
-        let center = DistributedNotificationCenter.default()
-        for (name, player) in [("com.spotify.client.PlaybackStateChanged", Player.spotify),
-                               ("com.apple.Music.playerInfo", Player.music)] {
-            observers.append(center.addObserver(forName: Notification.Name(name), object: nil,
-                                                queue: .main) { [weak self] note in
-                let info = UncheckedBox(note.userInfo ?? [:])
-                MainActor.assumeIsolated { self?.received(info.value, from: player) }
-            })
+        // Delivered at once even though Notch is never the active app (the default would
+        // hold them until it becomes active).
+        broadcasts = BroadcastListener { [weak self] name, info in
+            let player: Player = name == BroadcastListener.spotify ? .spotify : .music
+            self?.received(info, from: player)
         }
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] note in
@@ -92,6 +93,15 @@ final class MusicService: ObservableObject {
                 self?.publish()
             }
         })
+        // The Spotify covers setting applies to the current track at once.
+        coversObserver = settings.$spotifyCovers.dropFirst().removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.artworkTrack = nil
+                self?.publish()
+            }
+        // Music already playing when Notch starts: read it, without asking for anything.
+        Task { [weak self] in await self?.refresh(prompt: false) }
     }
 
     /// While the island is open: poll the players every second (position for the lyrics).
@@ -103,7 +113,9 @@ final class MusicService: ObservableObject {
         guard on else { return }
         // A refusal may have been changed in System Settings since: ask macOS again (no dialog).
         checkedPermission.subtract(deniedPlayers)
-        if let current = nowPlaying, lyricsTrack != current.trackID { loadLyrics(for: current) }
+        if let current = nowPlaying, lyricsTrack != current.trackID || lyricsFailedTrack == current.trackID {
+            loadLyrics(for: current)
+        }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
@@ -135,14 +147,20 @@ final class MusicService: ObservableObject {
     }
 
     /// Asks macOS once per player (the system dialog), then remembers the answer.
-    private func ensurePermission(_ player: Player) async -> Bool {
+    /// With `prompt: false` it only reports an answer already given, and never shows a dialog.
+    private func ensurePermission(_ player: Player, prompt: Bool = true) async -> Bool {
+        guard prompt else {
+            return await AppleScript.automationPermission(for: player.rawValue, ask: false) == noErr
+        }
         if !checkedPermission.contains(player) {
             checkedPermission.insert(player)
             let status = await AppleScript.automationPermission(for: player.rawValue, ask: true)
             MusicLog.log.notice("Automation for \(player.name, privacy: .public): \(status)")
             if status == noErr {
                 deniedPlayers.remove(player)
-            } else if status != -600 { // -600: the player quit meanwhile
+            } else if status == -600 { // the player quit meanwhile: ask next time
+                checkedPermission.remove(player)
+            } else {
                 deniedPlayers.insert(player) // -1743 refused, -1744 could not ask
             }
         }
@@ -164,7 +182,7 @@ final class MusicService: ObservableObject {
             return
         }
         states[player] = track
-        publish()
+        publish(announce: true)
     }
 
     /// Builds the state from a player's broadcast. nil when the player stopped.
@@ -202,14 +220,15 @@ final class MusicService: ObservableObject {
         return [Player.spotify, .music].filter { running.contains($0.rawValue) }
     }
 
-    func refresh() async {
+    func refresh(prompt: Bool = true) async {
         let running = runningPlayers()
         for player in [Player.spotify, .music] where !running.contains(player) { states[player] = nil }
         for player in running {
-            guard await ensurePermission(player) else { continue }
+            guard await ensurePermission(player, prompt: prompt) else { continue }
             switch await Self.read(player) {
             case .playing(let track): states[player] = track
             case .stopped: states[player] = nil
+            case .denied: deniedPlayers.insert(player)
             case .failed: break // keep what the broadcasts said
             }
         }
@@ -217,12 +236,14 @@ final class MusicService: ObservableObject {
     }
 
     /// One place decides what is "now playing", from whichever source spoke last.
-    private func publish() {
+    /// `announce`: the change came from the player itself (a real track change), so the
+    /// live activity may show a bubble. Polls and launch reads never announce.
+    private func publish(announce: Bool = false) {
         let candidates = [Player.spotify, .music].compactMap { states[$0] }
         let current = candidates.first(where: \.isPlaying)
             ?? candidates.first(where: { $0.player == nowPlaying?.player })
             ?? candidates.first
-        let startedNewTrack = current.map { $0.isPlaying && $0.trackID != nowPlaying?.trackID } ?? false
+        let startedNewTrack = announce && (current.map { $0.isPlaying && $0.trackID != nowPlaying?.trackID } ?? false)
         if let current {
             if !current.continues(nowPlaying) { nowPlaying = current }
         } else if nowPlaying != nil {
@@ -241,7 +262,7 @@ final class MusicService: ObservableObject {
         if startedNewTrack { onTrackStart(current) }
     }
 
-    private enum ReadResult { case playing(NowPlaying), stopped, failed }
+    private enum ReadResult { case playing(NowPlaying), stopped, denied, failed }
 
     private static func read(_ player: Player) async -> ReadResult {
         let source: String
@@ -270,9 +291,9 @@ final class MusicService: ObservableObject {
             """
         }
         let result = await AppleScript.run(AppleScript.ifRunning(player.rawValue, source))
-        guard result.error == nil else {
-            MusicLog.log.error("\(player.name, privacy: .public) script failed: \(result.error ?? "", privacy: .public)")
-            return .failed
+        if let error = result.error {
+            MusicLog.log.error("\(player.name, privacy: .public) script failed: \(error, privacy: .public)")
+            return error.hasPrefix("-1743") ? .denied : .failed
         }
         let values = result.values
         guard case .text(let rawState)? = values.first else { return .failed }
@@ -302,7 +323,7 @@ final class MusicService: ObservableObject {
         Task {
             // Never prompt from here: the prompt belongs to the first time the island opens.
             guard await AppleScript.automationPermission(for: track.player.rawValue, ask: false) == noErr else {
-                artworkTrack = nil // try again once allowed
+                if artworkTrack == track.trackID { artworkTrack = nil } // try again once allowed
                 return
             }
             var image: NSImage?
@@ -321,7 +342,9 @@ final class MusicService: ObservableObject {
                 guard settings.spotifyCovers else { break }
                 let values = await AppleScript.run(AppleScript.ifRunning(Player.spotify.rawValue,
                     "tell application id \"com.spotify.client\" to return {artwork url of current track}"))
-                if let url = URL(string: values.values.first?.string ?? ""),
+                // Only Spotify's own image server, over HTTPS.
+                if let url = URL(string: values.values.first?.string ?? ""), url.scheme == "https",
+                   let host = url.host, host == "scdn.co" || host.hasSuffix(".scdn.co"),
                    let result = try? await Net.session.data(from: url) {
                     image = NSImage(data: result.0)
                 }
@@ -334,11 +357,17 @@ final class MusicService: ObservableObject {
 
     private func loadLyrics(for track: NowPlaying) {
         lyricsTrack = track.trackID
+        lyricsFailedTrack = nil
         lyrics = []
         Task {
             let lines = await LyricsStore.lyrics(title: track.title, artist: track.artist,
                                                  album: track.album, duration: track.duration)
-            if lyricsTrack == track.trackID { lyrics = lines }
+            guard lyricsTrack == track.trackID else { return }
+            if let lines {
+                lyrics = lines
+            } else {
+                lyricsFailedTrack = track.trackID // offline: retried next time the island opens
+            }
         }
     }
 
@@ -497,7 +526,8 @@ enum LyricsStore {
         return dir
     }
 
-    static func lyrics(title: String, artist: String, album: String, duration: Double) async -> [LyricLine] {
+    /// nil on network error (not cached, so it can be retried).
+    static func lyrics(title: String, artist: String, album: String, duration: Double) async -> [LyricLine]? {
         let key = SHA256.hash(data: Data("\(artist)\n\(title)\n\(Int(duration.rounded()))".utf8))
             .map { String(format: "%02x", $0) }.joined()
         let file = cacheDir.appendingPathComponent(key + ".lrc")
@@ -505,7 +535,7 @@ enum LyricsStore {
             return parse(cached) // an empty file means "no synced lyrics"
         }
         guard let lrc = await fetch(title: title, artist: artist, album: album, duration: duration) else {
-            return [] // network error: do not cache, try again next time
+            return nil // network error: do not cache, try again next time
         }
         try? lrc.write(to: file, atomically: true, encoding: .utf8)
         return parse(lrc)
@@ -565,4 +595,38 @@ enum LyricsStore {
 struct UncheckedBox<T>: @unchecked Sendable {
     let value: T
     init(_ value: T) { self.value = value }
+}
+
+/// Listens to the players' broadcasts with immediate delivery (an accessory app is
+/// rarely active, and by default distributed notifications wait for activation).
+final class BroadcastListener: NSObject {
+    static let spotify = "com.spotify.client.PlaybackStateChanged"
+    static let music = "com.apple.Music.playerInfo"
+
+    private let handler: @MainActor (String, [AnyHashable: Any]) -> Void
+
+    init(handler: @escaping @MainActor (String, [AnyHashable: Any]) -> Void) {
+        self.handler = handler
+        super.init()
+        let center = DistributedNotificationCenter.default()
+        for name in [Self.spotify, Self.music] {
+            center.addObserver(self, selector: #selector(received(_:)), name: Notification.Name(name),
+                               object: nil, suspensionBehavior: .deliverImmediately)
+        }
+    }
+
+    deinit {
+        DistributedNotificationCenter.default().removeObserver(self)
+    }
+
+    @objc private func received(_ note: Notification) {
+        let name = note.name.rawValue
+        let info = UncheckedBox(note.userInfo ?? [:])
+        let handler = handler
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { handler(name, info.value) }
+        } else {
+            DispatchQueue.main.async { MainActor.assumeIsolated { handler(name, info.value) } }
+        }
+    }
 }

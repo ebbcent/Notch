@@ -12,9 +12,15 @@ final class SettingsWindow {
         makeContent = content
     }
 
+    private var controller: NSHostingController<AnyView>?
+
     func show() {
-        if window == nil {
-            let controller = NSHostingController(rootView: makeContent())
+        if let controller {
+            // Fresh state each time (login item status, cache size may have changed).
+            controller.rootView = AnyView(makeContent().id(UUID()))
+        } else {
+            let controller = NSHostingController(rootView: AnyView(makeContent().id(UUID())))
+            self.controller = controller
             let window = NSWindow(contentViewController: controller)
             window.title = "Notch Settings"
             window.styleMask = [.titled, .closable]
@@ -25,6 +31,7 @@ final class SettingsWindow {
         }
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless() // also when Notch was launched in the background
     }
 }
 
@@ -127,7 +134,7 @@ private struct TilesPane: View {
                         .disabled(city.trimmingCharacters(in: .whitespaces) == settings.city)
                 }
                 weatherStatus
-                Text("Temperatures in \(WeatherService.usesFahrenheit ? "°F" : "°C"), from your region settings.")
+                Text("Temperatures in \(WeatherService.usesFahrenheit ? "°F" : "°C"), as set in System Settings › General › Language & Region.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }

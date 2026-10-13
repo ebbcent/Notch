@@ -48,8 +48,13 @@ final class WeatherService: ObservableObject {
             }
     }
 
-    /// °F where the region uses US units, °C everywhere else.
-    nonisolated static var usesFahrenheit: Bool { Locale.current.measurementSystem == .us }
+    /// The temperature unit chosen in Language & Region (which can differ from the
+    /// region's measurement system): a formatted temperature carries the preferred unit.
+    nonisolated static var usesFahrenheit: Bool {
+        let formatter = MeasurementFormatter()
+        formatter.locale = .autoupdatingCurrent
+        return formatter.string(from: Measurement(value: 20, unit: UnitTemperature.celsius)).contains("F")
+    }
 
     /// Refreshes if the data is older than 30 minutes (or if forced).
     func refresh(force: Bool = false) {
