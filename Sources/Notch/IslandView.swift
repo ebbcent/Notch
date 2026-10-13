@@ -31,6 +31,7 @@ struct IslandShape: Shape {
 struct IslandView: View {
     @ObservedObject var model: IslandModel
     @ObservedObject var settings: Settings
+    @EnvironmentObject var claude: ClaudeService
 
     var body: some View {
         let palette = settings.theme.palette
@@ -67,7 +68,7 @@ struct IslandView: View {
         case .resting:
             Color.clear
         case .compact:
-            CompactView(palette: palette, notchSize: notch)
+            ClaudeCompactView(palette: palette, notchSize: notch)
                 .transition(.opacity)
         case .peek:
             if let peek = model.peek {
@@ -77,31 +78,17 @@ struct IslandView: View {
                     .transition(.opacity)
             }
         case .expanded:
-            ExpandedView(palette: palette, settings: settings, showsLyrics: model.showsLyrics)
-                .padding(.top, notch.height + Layout.tileTopGap)
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+            if let request = claude.current {
+                PermissionCard(request: request, palette: palette, pendingCount: claude.requests.count)
+                    .id(request.id)
+                    .padding(.top, notch.height)
+                    .transition(.opacity)
+            } else {
+                ExpandedView(palette: palette, settings: settings, showsLyrics: model.showsLyrics)
+                    .padding(.top, notch.height + Layout.tileTopGap)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+            }
         }
-    }
-}
-
-/// Black pill to the sides of the notch. Filled in at the Claude Code step.
-struct CompactView: View {
-    let palette: Palette
-    let notchSize: CGSize
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Image(systemName: "sparkle")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(palette.accent)
-                .frame(width: Layout.compactSide)
-            Spacer().frame(width: notchSize.width)
-            Circle()
-                .fill(palette.accent)
-                .frame(width: 6, height: 6)
-                .frame(width: Layout.compactSide)
-        }
-        .frame(height: notchSize.height)
     }
 }
 

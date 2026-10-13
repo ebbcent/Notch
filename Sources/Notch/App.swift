@@ -1,13 +1,19 @@
 import AppKit
+import ServiceManagement
+import SwiftUI
 
 @main
 enum NotchApp {
     @MainActor
     static func main() {
+        // Launched by a Claude Code hook: forward the event and exit, no UI.
+        if CommandLine.arguments.contains("--hook") {
+            exit(HookClient.run())
+        }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
-        app.setActivationPolicy(.accessory) // no Dock icon
+        app.setActivationPolicy(.accessory) // menu bar only, no Dock icon
         app.run()
     }
 }
@@ -22,23 +28,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var weather: WeatherService!
     private var calendar: CalendarService!
     private var timer: FocusTimer!
+    private var claude: ClaudeService!
     private var peeks: PeekCenter!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // One copy at a time (the hook socket belongs to one app).
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .filter { $0 != NSRunningApplication.current }
+        if !others.isEmpty {
+            NSApp.terminate(nil)
+            return
+        }
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "capsule.fill", accessibilityDescription: "Notch")
+        statusItem.button?.toolTip = "Notch"
         menu.delegate = self
+        menu.autoenablesItems = false
         statusItem.menu = menu
+
         music = MusicService(settings: settings)
         weather = WeatherService(settings: settings)
         calendar = CalendarService()
         timer = FocusTimer()
+        claude = ClaudeService()
         island = IslandController(settings: settings, music: music, weather: weather,
-                                  calendar: calendar, timer: timer)
+                                  calendar: calendar, timer: timer, claude: claude)
         peeks = PeekCenter(model: island.model, settings: settings)
+        claude.start()
         timer.onFinish = { [weak self] in
             self?.island.model.showPeek(Peek(symbol: "timer", title: "Focus done", subtitle: "25 min"), seconds: 4)
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        claude?.stop() // hands any waiting request back to Claude Code
     }
 
     // MARK: Menu
@@ -46,50 +70,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
-        let themeItem = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
-        let themeMenu = NSMenu()
-        for kind in ThemeKind.allCases {
-            let item = NSMenuItem(title: kind.title, action: #selector(pickTheme(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = kind.rawValue
-            item.state = settings.theme == kind ? .on : .off
-            themeMenu.addItem(item)
-        }
-        themeItem.submenu = themeMenu
-        menu.addItem(themeItem)
+        menu.addItem(header("Tiles"))
+        let tiles = NSMenuItem()
+        let editor = NSHostingView(rootView: TilesEditor(settings: settings))
+        editor.frame.size = editor.fittingSize
+        tiles.view = editor
+        menu.addItem(tiles)
 
         let cityTitle = settings.city.isEmpty ? "Weather City…" : "Weather City: \(settings.city)…"
-        addItem(to: menu, cityTitle, #selector(askCity))
-        let covers = NSMenuItem(title: "Spotify Covers (asks Spotify's servers)", action: #selector(toggleCovers),
-                                keyEquivalent: "")
-        covers.target = self
-        covers.state = settings.spotifyCovers ? .on : .off
-        menu.addItem(covers)
-        let focus = NSMenuItem(title: "Do Not Disturb Bubbles" + (settings.focusPeeks ? "" : FocusAccess.menuNote),
-                               action: #selector(toggleFocusPeeks), keyEquivalent: "")
-        focus.target = self
-        focus.state = settings.focusPeeks ? .on : .off
-        menu.addItem(focus)
+        menu.addItem(item(cityTitle, #selector(askCity)))
+        menu.addItem(item("Spotify Covers (asks Spotify's servers)", #selector(toggleCovers),
+                          on: settings.spotifyCovers))
+        menu.addItem(item("Do Not Disturb Bubbles" + (settings.focusPeeks ? "" : FocusAccess.menuNote),
+                          #selector(toggleFocusPeeks), on: settings.focusPeeks))
 
         menu.addItem(.separator())
-        // Temporary, to try each state by hand.
-        let testItem = NSMenuItem(title: "Test", action: nil, keyEquivalent: "")
-        let testMenu = NSMenu()
-        addItem(to: testMenu, "Compact pill on/off", #selector(testCompact))
-        addItem(to: testMenu, "Show a peek", #selector(testPeek))
-        addItem(to: testMenu, "Open the island (pinned)", #selector(testExpand))
-        addItem(to: testMenu, "Close the island", #selector(testCollapse))
-        testItem.submenu = testMenu
-        menu.addItem(testItem)
+        menu.addItem(header("Theme"))
+        for kind in ThemeKind.allCases {
+            let i = item(kind.title, #selector(pickTheme(_:)), on: settings.theme == kind)
+            i.representedObject = kind.rawValue
+            menu.addItem(i)
+        }
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Notch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        let claudeItem = NSMenuItem(title: "Claude Code", action: nil, keyEquivalent: "")
+        let claudeMenu = NSMenu()
+        claudeMenu.autoenablesItems = false
+        let status = NSMenuItem(title: claude.listening ? "Listening for hooks" : "Not listening (socket error)",
+                                action: nil, keyEquivalent: "")
+        status.isEnabled = false
+        claudeMenu.addItem(status)
+        let keys = NSMenuItem(title: claude.shortcutsAvailable
+                              ? "Allow \(HotKeys.allow.label) · Deny \(HotKeys.deny.label)"
+                              : "Shortcuts taken by another app", action: nil, keyEquivalent: "")
+        keys.isEnabled = false
+        claudeMenu.addItem(keys)
+        claudeMenu.addItem(.separator())
+        claudeMenu.addItem(item("Copy Hook Settings", #selector(copyHookSettings)))
+        claudeMenu.addItem(item("Setup Instructions…", #selector(showHookHelp)))
+        claudeItem.submenu = claudeMenu
+        menu.addItem(claudeItem)
+
+        menu.addItem(.separator())
+        menu.addItem(item("Launch at Login", #selector(toggleLoginItem),
+                          on: SMAppService.mainApp.status == .enabled))
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        let about = NSMenuItem(title: "Notch \(version)", action: nil, keyEquivalent: "")
+        about.isEnabled = false
+        menu.addItem(about)
+        let quit = NSMenuItem(title: "Quit Notch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(quit)
     }
 
-    private func addItem(to menu: NSMenu, _ title: String, _ action: Selector) {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
+    private func header(_ title: String) -> NSMenuItem {
+        NSMenuItem.sectionHeader(title: title)
+    }
+
+    private func item(_ title: String, _ action: Selector, on: Bool? = nil) -> NSMenuItem {
+        let i = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        i.target = self
+        if let on { i.state = on ? .on : .off }
+        return i
+    }
+
+    // MARK: Actions
+
+    @objc private func pickTheme(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let kind = ThemeKind(rawValue: raw) {
+            settings.theme = kind
+        }
     }
 
     @objc private func askCity() {
@@ -117,16 +166,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         peeks.setFocusPeeks(!settings.focusPeeks)
     }
 
-    @objc private func testCompact() { island.model.compactActive.toggle() }
-    @objc private func testPeek() {
-        island.model.showPeek(Peek(symbol: "bolt.fill", title: "Charging", subtitle: "82%"))
+    @objc private func copyHookSettings() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(ClaudeService.settingsSnippet, forType: .string)
     }
-    @objc private func testExpand() { island.model.expand(pin: true) }
-    @objc private func testCollapse() { island.model.collapse() }
 
-    @objc private func pickTheme(_ sender: NSMenuItem) {
-        if let raw = sender.representedObject as? String, let kind = ThemeKind(rawValue: raw) {
-            settings.theme = kind
+    @objc private func showHookHelp() {
+        let alert = NSAlert()
+        alert.messageText = "Show Claude Code in the notch"
+        alert.informativeText = """
+        Add this "hooks" block to ~/.claude/settings.json (inside the top-level { }, \
+        merged with any hooks you already have). "Copy Hook Settings" puts it on the clipboard.
+
+        When Claude asks for a permission, the island opens with the whole request. \
+        Allow works once you have seen all of it. If you do not answer within \
+        \(Int(HookSocket.answerTimeout)) s, or choose "Ask in Terminal", Claude Code asks in its own window.
+        """
+        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 260))
+        text.string = ClaudeService.settingsSnippet
+        text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        text.isEditable = false
+        let scroll = NSScrollView(frame: text.frame)
+        scroll.documentView = text
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        text.isHorizontallyResizable = true
+        text.textContainer?.widthTracksTextView = false
+        text.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                                   height: CGFloat.greatestFiniteMagnitude)
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: "Copy and Close")
+        alert.addButton(withTitle: "Close")
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn { copyHookSettings() }
+    }
+
+    @objc private func toggleLoginItem() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+            } else {
+                try service.register()
+                if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Launch at login could not be changed"
+            alert.informativeText = "\(error.localizedDescription)\n\nMove Notch to /Applications and try again."
+            NSApp.activate()
+            alert.runModal()
         }
     }
 }

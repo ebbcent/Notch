@@ -22,7 +22,6 @@ final class IslandPanel: NSPanel {
         isMovable = false
         isReleasedWhenClosed = false
         acceptsMouseMovedEvents = true
-        ignoresMouseEvents = true       // clicks pass through until the mouse is on the island
     }
 
     override var canBecomeKey: Bool { false }
@@ -54,13 +53,15 @@ final class IslandController {
     private let music: MusicService
     private let weather: WeatherService
     private let calendar: CalendarService
+    private let claude: ClaudeService
 
     init(settings: Settings, music: MusicService, weather: WeatherService,
-         calendar: CalendarService, timer: FocusTimer) {
+         calendar: CalendarService, timer: FocusTimer, claude: ClaudeService) {
         self.settings = settings
         self.music = music
         self.weather = weather
         self.calendar = calendar
+        self.claude = claude
         panel = IslandPanel.make()
         tracker = MouseTracker()
         let screen = NotchGeometry.preferredScreen()
@@ -71,6 +72,7 @@ final class IslandController {
             .environmentObject(weather)
             .environmentObject(calendar)
             .environmentObject(timer)
+            .environmentObject(claude)
         let hosting = IslandHostingView(rootView: AnyView(root))
         hosting.sizingOptions = []
         panel.contentView = hosting
@@ -85,7 +87,6 @@ final class IslandController {
             owner: tracker, userInfo: nil))
 
         reposition()
-        panel.orderFrontRegardless()
         installMonitors()
         observeContent()
     }
@@ -106,6 +107,42 @@ final class IslandController {
             .receive(on: main)
             .sink { [weak self] state in self?.stateChanged(state) }
             .store(in: &cancellables)
+
+        claude.$isWorking
+            .removeDuplicates()
+            .receive(on: main)
+            .sink { [weak self] working in self?.model.compactActive = working }
+            .store(in: &cancellables)
+
+        claude.$requests
+            .map { $0.first.map { ($0.id, $0.body) } }
+            .removeDuplicates { $0?.0 == $1?.0 }
+            .receive(on: main)
+            .sink { [weak self] current in self?.showCard(for: current?.1) }
+            .store(in: &cancellables)
+
+        claude.onPeek = { [weak self] peek in self?.model.showPeek(peek, seconds: 4) }
+
+        // The window follows the island's size (see fitWindow).
+        model.$state.map { _ in () }
+            .merge(with: model.$expandedBodyWidth.map { _ in () },
+                   model.$showsLyrics.map { _ in () },
+                   model.$geometry.map { _ in () })
+            .receive(on: main)
+            .sink { [weak self] in self?.fitWindow() }
+            .store(in: &cancellables)
+    }
+
+    /// Opens the island on a permission request, tall enough to show it whole
+    /// (the text scrolls only if it is longer than about half the screen).
+    private func showCard(for body: String?) {
+        guard let body else {
+            model.cardHeight = nil
+            return
+        }
+        let screenHeight = model.geometry.screenFrame.height
+        let maxText = max(120, screenHeight * 0.6 - model.geometry.notchSize.height - 120)
+        model.cardHeight = CardLayout.height(for: body, maxText: maxText)
     }
 
     private func syncLayout() {
@@ -121,26 +158,50 @@ final class IslandController {
         if settings.isVisible(.calendar) { calendar.activate() }
     }
 
-    /// Centre the panel on the notch of the screen that has one.
+    /// Re-reads the notch geometry (screens added, removed or rearranged).
     func reposition() {
         guard let screen = NotchGeometry.preferredScreen() else { return }
         let geometry = NotchGeometry(screen: screen)
-        model.geometry = geometry
-        let width = Layout.expandedBodyWidth + 2 * Layout.maxEar + 2 * Layout.shadowPad
-        let height = geometry.notchSize.height + Layout.expandedExtraHeight + Layout.shadowPad
-        let frame = CGRect(x: geometry.screenFrame.midX - width / 2,
-                           y: geometry.screenFrame.maxY - height,
-                           width: width, height: height)
-        panel.setFrame(frame, display: true)
+        if geometry != model.geometry { model.geometry = geometry }
+        fitWindow(immediately: true)
         panel.orderFrontRegardless()
     }
 
-    private func installMonitors() {
-        // While the mouse is elsewhere, the panel ignores events, so moves are seen globally.
-        if let m = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged], handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.mouseMoved() }
-        }) { monitors.append(m) }
+    /// The window is exactly as big as the island (plus room for the shadow when open),
+    /// so it only takes the mouse where the island is. That lets a tracking area on the
+    /// panel see the pointer arrive on the notch, without a timer or a global monitor.
+    /// It grows at once when the island grows, and shrinks once the animation is over.
+    private var shrinkGeneration = 0
 
+    private func fitWindow(immediately: Bool = false) {
+        let g = model.geometry
+        let size = model.size
+        let pad = model.needsShadowRoom ? Layout.shadowPad : 0
+        let margin = model.needsShadowRoom ? 0 : Layout.hoverMargin
+        let width = size.width + 2 * (pad + margin)
+        let height = size.height + pad
+        let target = CGRect(x: (g.screenFrame.midX - width / 2).rounded(),
+                            y: g.screenFrame.maxY - height,
+                            width: width.rounded(), height: height)
+        shrinkGeneration += 1
+        if immediately || panel.frame.isEmpty {
+            panel.setFrame(target, display: true)
+            return
+        }
+        let union = panel.frame.union(target)
+        if union != panel.frame { panel.setFrame(union, display: true) }
+        guard union != target else { return }
+        let generation = shrinkGeneration
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard let self, self.shrinkGeneration == generation else { return }
+            self.panel.setFrame(target, display: true)
+            self.mouseMoved() // the pointer may now be outside the window
+        }
+    }
+
+    private func installMonitors() {
+        // Clicks elsewhere release a pinned island (mouse-down events reach global monitors).
         if let m = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, !self.model.hotRect.contains(NSEvent.mouseLocation) else { return }
@@ -169,8 +230,6 @@ final class IslandController {
     }
 
     private func mouseMoved() {
-        let inside = model.hotRect.contains(NSEvent.mouseLocation)
-        if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
-        model.setHover(inside)
+        model.setHover(model.hotRect.contains(NSEvent.mouseLocation))
     }
 }

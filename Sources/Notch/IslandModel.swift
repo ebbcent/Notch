@@ -22,6 +22,7 @@ enum Layout {
     static let notchRadius: CGFloat = 9           // bottom corners of the black band
     static let shadowPad: CGFloat = 40            // room for the shadow inside the window
     static let maxEar: CGFloat = 10
+    static let hoverMargin: CGFloat = 4           // extra hover width beside the notch at rest
 }
 
 /// Where the notch is on the screen that has one (or where the fake one goes).
@@ -83,6 +84,8 @@ final class IslandModel: ObservableObject {
     /// Set from the visible tiles and the music state.
     @Published var expandedBodyWidth: CGFloat = Layout.expandedBodyWidth
     @Published var showsLyrics = false
+    /// Height of a Claude Code permission card; while set, the island stays open on it.
+    @Published var cardHeight: CGFloat? { didSet { update() } }
 
     private(set) var pinned = false
     private var hovering = false
@@ -126,6 +129,9 @@ final class IslandModel: ObservableObject {
             return CGSize(width: max(n.width + 2 * Layout.compactSide, Layout.peekMinWidth) + ears,
                           height: n.height + Layout.peekExtraHeight)
         case .expanded:
+            if let cardHeight {
+                return CGSize(width: Layout.expandedBodyWidth + ears, height: n.height + cardHeight)
+            }
             let height = showsLyrics ? Layout.expandedExtraHeight : Layout.tilesBlockHeight
             return CGSize(width: expandedBodyWidth + ears, height: n.height + height)
         }
@@ -137,8 +143,14 @@ final class IslandModel: ObservableObject {
         let f = geometry.screenFrame
         let body = CGRect(x: f.midX - s.width / 2 + earRadius, y: f.maxY - s.height,
                           width: s.width - 2 * earRadius, height: s.height)
-        return state == .resting ? body.insetBy(dx: -6, dy: 0) : body
+        // A little wider at rest so the notch is easy to reach, and 2 pt above the top
+        // edge because the pointer can report y == screen top.
+        let margin: CGFloat = (state == .resting || state == .compact) ? Layout.hoverMargin : 0
+        return CGRect(x: body.minX - margin, y: body.minY, width: body.width + 2 * margin, height: body.height + 2)
     }
+
+    /// Whether the window needs room around the island for the shadow.
+    var needsShadowRoom: Bool { state == .peek || state == .expanded }
 
     // MARK: Events
 
@@ -206,7 +218,7 @@ final class IslandModel: ObservableObject {
 
     private func update() {
         let next: State
-        if wantsExpanded { next = .expanded }
+        if wantsExpanded || cardHeight != nil { next = .expanded }
         else if peek != nil { next = .peek }
         else if compactActive { next = .compact }
         else { next = .resting }
