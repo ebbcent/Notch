@@ -31,7 +31,6 @@ struct IslandShape: Shape {
 struct IslandView: View {
     @ObservedObject var model: IslandModel
     @ObservedObject var settings: Settings
-    @EnvironmentObject var claude: ClaudeService
 
     var body: some View {
         let palette = settings.theme.palette
@@ -68,7 +67,7 @@ struct IslandView: View {
         case .resting:
             Color.clear
         case .compact:
-            ClaudeCompactView(palette: palette, notchSize: notch)
+            TimerCompactView(palette: palette, notchSize: notch)
                 .transition(.opacity)
         case .peek:
             if let peek = model.peek {
@@ -78,17 +77,35 @@ struct IslandView: View {
                     .transition(.opacity)
             }
         case .expanded:
-            if let request = claude.current {
-                PermissionCard(request: request, palette: palette, pendingCount: claude.requests.count)
-                    .id(request.id)
-                    .padding(.top, notch.height)
-                    .transition(.opacity)
-            } else {
-                ExpandedView(palette: palette, settings: settings, showsLyrics: model.showsLyrics)
-                    .padding(.top, notch.height + Layout.tileTopGap)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
-            }
+            ExpandedView(palette: palette, settings: settings, showsLyrics: model.showsLyrics)
+                .padding(.top, notch.height + Layout.tileTopGap)
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
         }
+    }
+}
+
+/// Black pill beside the notch while the focus timer runs: an icon and the minutes left.
+struct TimerCompactView: View {
+    let palette: Palette
+    let notchSize: CGSize
+    @EnvironmentObject var timer: FocusTimer
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Image(systemName: "timer")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(palette.accent)
+                .frame(width: Layout.compactSide)
+            Spacer().frame(width: notchSize.width)
+            Text(timer.label)
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(palette.accent)
+                .minimumScaleFactor(0.8)
+                .frame(width: Layout.compactSide)
+        }
+        .frame(height: notchSize.height)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Focus timer, \(timer.label) left")
     }
 }
 

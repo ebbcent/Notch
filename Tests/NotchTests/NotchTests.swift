@@ -35,149 +35,6 @@ final class WeatherTests: XCTestCase {
     }
 }
 
-final class ClaudeTextTests: XCTestCase {
-    func testActivities() {
-        XCTAssertEqual(ClaudeService.activity(tool: "Read", input: ["file_path": "/a/b/Main.swift"]),
-                       ClaudeActivity(symbol: "doc.text", verb: "Reading", detail: "Main.swift"))
-        XCTAssertEqual(ClaudeService.activity(tool: "Bash", input: ["command": "make\nmake test"]).detail, "make")
-        XCTAssertEqual(ClaudeService.activity(tool: "Grep", input: ["pattern": "TODO"]).verb, "Searching")
-        XCTAssertEqual(ClaudeService.activity(tool: "Edit", input: [:]).verb, "Editing")
-    }
-
-    func testPermissionBodyIsNeverShortened() {
-        let long = String(repeating: "echo x && ", count: 500) + "echo end"
-        let body = ClaudeService.permissionBody(tool: "Bash", input: ["command": long])
-        XCTAssertTrue(body.hasSuffix("echo end"))
-        XCTAssertTrue(body.contains(long))
-        let other = ClaudeService.permissionBody(tool: "Write", input: ["file_path": "/tmp/a", "content": long])
-        XCTAssertTrue(other.contains("echo end"))
-    }
-
-    func testInvisibleCharactersAreShown() {
-        // A right-to-left override could make "rm -rf ~/x" look like something else.
-        let body = ClaudeService.permissionBody(tool: "Bash", input: ["command": "echo \u{202E}cod.exe\u{200B}"])
-        XCTAssertEqual(body, "echo ⟨U+202E⟩cod.exe⟨U+200B⟩")
-        XCTAssertEqual(ClaudeService.revealInvisible("a\tb\nc"), "a\tb\nc")
-    }
-
-    func testReadableBodyForFileChanges() {
-        let body = ClaudeService.permissionBody(tool: "Write", input: ["file_path": "/tmp/a.txt", "content": "one\ntwo"])
-        XCTAssertEqual(body, "content:\none\ntwo\nfile_path: /tmp/a.txt")
-    }
-
-    func testShellQuoting() {
-        XCTAssertEqual(ClaudeService.shellQuote("/Users/me/My Apps/n.sh"), "'/Users/me/My Apps/n.sh'")
-        XCTAssertEqual(ClaudeService.shellQuote("/a'b"), "'/a'\\''b'")
-    }
-
-    func testDurations() {
-        XCTAssertEqual(ClaudeService.duration(42), "42 s")
-        XCTAssertEqual(ClaudeService.duration(134), "2 min 14 s")
-        XCTAssertEqual(ClaudeService.duration(3720), "1 h 02 min")
-    }
-
-    func testSettingsSnippetIsValidJSON() throws {
-        let json = "{" + ClaudeService.settingsSnippet + "}"
-        let object = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
-        let hooks = try XCTUnwrap(object?["hooks"] as? [String: Any])
-        XCTAssertEqual(Set(hooks.keys), ["UserPromptSubmit", "PreToolUse", "PermissionRequest", "Notification", "Stop"])
-    }
-
-    func testDecisionOutput() throws {
-        let allow = try XCTUnwrap(HookClient.decision(for: "allow"))
-        XCTAssertEqual(String(decoding: allow, as: UTF8.self),
-                       #"{"hookSpecificOutput":{"decision":{"behavior":"allow"},"hookEventName":"PermissionRequest"}}"#)
-        let deny = try XCTUnwrap(HookClient.decision(for: "deny"))
-        XCTAssertTrue(String(decoding: deny, as: UTF8.self).contains(#""behavior":"deny""#))
-        XCTAssertNil(HookClient.decision(for: ""))
-    }
-}
-
-final class HookSocketTests: XCTestCase {
-    private func tempSocketPath() -> String {
-        "/tmp/notch-test-\(UUID().uuidString.prefix(8))/notch.sock"
-    }
-
-    func testAddressRejectsTooLongPaths() {
-        XCTAssertNotNil(HookSocket.address("/tmp/a.sock"))
-        XCTAssertNil(HookSocket.address("/tmp/" + String(repeating: "x", count: 200)))
-    }
-
-    func testClientDoesNothingWhenAppIsNotRunning() {
-        let input = Data(#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#.utf8)
-        XCTAssertNil(HookClient.forward(input, to: tempSocketPath(), timeout: 1))
-    }
-
-    func testPermissionRoundTrip() throws {
-        let path = tempSocketPath()
-        let received = expectation(description: "request reaches the app")
-        let server = HookServer { json, connection in
-            XCTAssertEqual(json["tool_name"] as? String, "Bash")
-            connection.reply("allow")
-            received.fulfill()
-        }
-        XCTAssertTrue(server.start(path: path))
-        defer { server.stop() }
-
-        var info = stat()
-        XCTAssertEqual(stat(path, &info), 0)
-        XCTAssertEqual(info.st_mode & 0o777, 0o600, "only the user may talk to the app")
-
-        let input = Data(#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"}}"#.utf8)
-        final class Box: @unchecked Sendable { var data: Data? }
-        let output = Box()
-        let done = expectation(description: "hook returns")
-        Thread.detachNewThread {
-            output.data = HookClient.forward(input, to: path, timeout: 5)
-            done.fulfill()
-        }
-        wait(for: [received, done], timeout: 10)
-        let text = String(decoding: try XCTUnwrap(output.data), as: UTF8.self)
-        XCTAssertTrue(text.contains(#""behavior":"allow""#))
-    }
-
-    func testRequestIsDroppedWhenTheHookGoesAway() throws {
-        let path = tempSocketPath()
-        let hungUp = expectation(description: "the app notices the hook left")
-        final class Keep: @unchecked Sendable { var connections: [HookConnection] = [] }
-        let keep = Keep() // the app keeps pending requests the same way
-        let server = HookServer { _, connection in
-            keep.connections.append(connection)
-            connection.onHangUp { hungUp.fulfill() }
-        }
-        XCTAssertTrue(server.start(path: path))
-        defer { server.stop() }
-
-        var addr = try XCTUnwrap(HookSocket.address(path))
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        let connected = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        XCTAssertEqual(connected, 0)
-        XCTAssertTrue(HookSocket.writeAll(fd, Data("{\"hook_event_name\":\"PermissionRequest\"}\n".utf8)))
-        Thread.sleep(forTimeInterval: 0.3)
-        close(fd) // like Esc in Claude Code
-        wait(for: [hungUp], timeout: 5)
-    }
-
-    func testFireAndForgetEventsReturnImmediately() {
-        let path = tempSocketPath()
-        let received = expectation(description: "event reaches the app")
-        let server = HookServer { json, connection in
-            XCTAssertEqual(json["hook_event_name"] as? String, "Stop")
-            connection.close()
-            received.fulfill()
-        }
-        XCTAssertTrue(server.start(path: path))
-        defer { server.stop() }
-        let input = Data(#"{"hook_event_name":"Stop"}"#.utf8)
-        XCTAssertNil(HookClient.forward(input, to: path))
-        wait(for: [received], timeout: 5)
-    }
-}
-
 final class IslandModelTests: XCTestCase {
     @MainActor
     func testStatesAndSizes() {
@@ -193,11 +50,10 @@ final class IslandModelTests: XCTestCase {
         model.showPeek(Peek(symbol: "bolt.fill", title: "Charging"), seconds: 10)
         XCTAssertEqual(model.state, .peek)
 
-        model.cardHeight = 200
+        model.expand(pin: true)
         XCTAssertEqual(model.state, .expanded)
-        XCTAssertEqual(model.size.height, notch.height + 200)
 
-        model.cardHeight = nil
+        model.collapse()
         XCTAssertEqual(model.state, .peek)
     }
 

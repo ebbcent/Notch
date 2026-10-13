@@ -16,8 +16,6 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Notch" "$APP/Contents/MacOS/Notch"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-cp Resources/notch-hook.sh "$APP/Contents/Resources/notch-hook.sh"
-chmod +x "$APP/Contents/Resources/notch-hook.sh"
 
 # App icon from Resources/AppIcon.png (1024 px).
 ICONSET=$(mktemp -d)/AppIcon.iconset
@@ -41,7 +39,7 @@ codesign --force --sign "$SIGN" --identifier "$BUNDLE_ID" "$APP"
 echo "Built $APP (signed with: $SIGN)"
 
 if [[ "${1:-}" == "run" ]]; then
-    pkill -f "/Applications/Notch.app/Contents/MacOS/Notch$" 2>/dev/null || true
+    pkill -x Notch 2>/dev/null || true
     sleep 0.5
     rm -rf /Applications/Notch.app
     cp -R "$APP" /Applications/Notch.app

@@ -6,10 +6,6 @@ import SwiftUI
 enum NotchApp {
     @MainActor
     static func main() {
-        // Launched by a Claude Code hook: forward the event and exit, no UI.
-        if CommandLine.arguments.contains("--hook") {
-            exit(HookClient.run())
-        }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -28,11 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var weather: WeatherService!
     private var calendar: CalendarService!
     private var timer: FocusTimer!
-    private var claude: ClaudeService!
     private var peeks: PeekCenter!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // One copy at a time (the hook socket belongs to one app).
+        // One copy at a time.
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
             .filter { $0 != NSRunningApplication.current }
         if !others.isEmpty {
@@ -51,18 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         weather = WeatherService(settings: settings)
         calendar = CalendarService()
         timer = FocusTimer()
-        claude = ClaudeService()
         island = IslandController(settings: settings, music: music, weather: weather,
-                                  calendar: calendar, timer: timer, claude: claude)
+                                  calendar: calendar, timer: timer)
         peeks = PeekCenter(model: island.model, settings: settings)
-        claude.start()
         timer.onFinish = { [weak self] in
             self?.island.model.showPeek(Peek(symbol: "timer", title: "Focus done", subtitle: "25 min"), seconds: 4)
         }
-    }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        claude?.stop() // hands any waiting request back to Claude Code
     }
 
     // MARK: Menu
@@ -91,25 +80,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             i.representedObject = kind.rawValue
             menu.addItem(i)
         }
-
-        menu.addItem(.separator())
-        let claudeItem = NSMenuItem(title: "Claude Code", action: nil, keyEquivalent: "")
-        let claudeMenu = NSMenu()
-        claudeMenu.autoenablesItems = false
-        let status = NSMenuItem(title: claude.listening ? "Listening for hooks" : "Not listening (socket error)",
-                                action: nil, keyEquivalent: "")
-        status.isEnabled = false
-        claudeMenu.addItem(status)
-        let keys = NSMenuItem(title: claude.shortcutsAvailable
-                              ? "Allow \(HotKeys.allow.label) · Deny \(HotKeys.deny.label)"
-                              : "Shortcuts taken by another app", action: nil, keyEquivalent: "")
-        keys.isEnabled = false
-        claudeMenu.addItem(keys)
-        claudeMenu.addItem(.separator())
-        claudeMenu.addItem(item("Copy Hook Settings", #selector(copyHookSettings)))
-        claudeMenu.addItem(item("Setup Instructions…", #selector(showHookHelp)))
-        claudeItem.submenu = claudeMenu
-        menu.addItem(claudeItem)
 
         menu.addItem(.separator())
         menu.addItem(item("Launch at Login", #selector(toggleLoginItem),
@@ -164,41 +134,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleFocusPeeks() {
         peeks.setFocusPeeks(!settings.focusPeeks)
-    }
-
-    @objc private func copyHookSettings() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(ClaudeService.settingsSnippet, forType: .string)
-    }
-
-    @objc private func showHookHelp() {
-        let alert = NSAlert()
-        alert.messageText = "Show Claude Code in the notch"
-        alert.informativeText = """
-        Add this "hooks" block to ~/.claude/settings.json (inside the top-level { }, \
-        merged with any hooks you already have). "Copy Hook Settings" puts it on the clipboard.
-
-        When Claude asks for a permission, the island opens with the whole request. \
-        Allow works once you have seen all of it. If you do not answer within \
-        \(Int(HookSocket.answerTimeout)) s, or choose "Ask in Terminal", Claude Code asks in its own window.
-        """
-        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 260))
-        text.string = ClaudeService.settingsSnippet
-        text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        text.isEditable = false
-        let scroll = NSScrollView(frame: text.frame)
-        scroll.documentView = text
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = true
-        text.isHorizontallyResizable = true
-        text.textContainer?.widthTracksTextView = false
-        text.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
-                                                   height: CGFloat.greatestFiniteMagnitude)
-        alert.accessoryView = scroll
-        alert.addButton(withTitle: "Copy and Close")
-        alert.addButton(withTitle: "Close")
-        NSApp.activate()
-        if alert.runModal() == .alertFirstButtonReturn { copyHookSettings() }
     }
 
     @objc private func toggleLoginItem() {

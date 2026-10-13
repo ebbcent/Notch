@@ -79,13 +79,11 @@ final class IslandModel: ObservableObject {
     @Published private(set) var state: State = .resting
     @Published private(set) var peek: Peek?
     @Published var geometry: NotchGeometry
-    /// Something wants the compact pill (e.g. Claude Code is working).
+    /// Something wants the compact pill (the focus timer is running).
     @Published var compactActive = false { didSet { update() } }
     /// Set from the visible tiles and the music state.
     @Published var expandedBodyWidth: CGFloat = Layout.expandedBodyWidth
     @Published var showsLyrics = false
-    /// Height of a Claude Code permission card; while set, the island stays open on it.
-    @Published var cardHeight: CGFloat? { didSet { update() } }
 
     private(set) var pinned = false
     private var hovering = false
@@ -129,9 +127,6 @@ final class IslandModel: ObservableObject {
             return CGSize(width: max(n.width + 2 * Layout.compactSide, Layout.peekMinWidth) + ears,
                           height: n.height + Layout.peekExtraHeight)
         case .expanded:
-            if let cardHeight {
-                return CGSize(width: Layout.expandedBodyWidth + ears, height: n.height + cardHeight)
-            }
             let height = showsLyrics ? Layout.expandedExtraHeight : Layout.tilesBlockHeight
             return CGSize(width: expandedBodyWidth + ears, height: n.height + height)
         }
@@ -215,7 +210,7 @@ final class IslandModel: ObservableObject {
 
     private func update() {
         let next: State
-        if wantsExpanded || cardHeight != nil { next = .expanded }
+        if wantsExpanded { next = .expanded }
         else if peek != nil { next = .peek }
         else if compactActive { next = .compact }
         else { next = .resting }

@@ -12,7 +12,6 @@ jobs:
       - run: swift --version
       - run: swift test
       - run: ./build.sh
-      - run: bash -n Resources/notch-hook.sh
       - run: plutil -lint build/Notch.app/Contents/Info.plist && codesign --verify --verbose build/Notch.app
       - run: ditto -c -k --keepParent build/Notch.app Notch.zip
       - uses: actions/upload-artifact@v4
