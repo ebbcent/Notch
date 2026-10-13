@@ -46,6 +46,11 @@ build, so macOS would ask again after each rebuild. Create a local certificate o
   - **Calendar** – next event (EventKit). Access is asked the first time the island opens.
   - **Focus timer** – 25 min, start/pause and reset; a bubble and a sound when it ends.
 
+- **Step 4** – peeks (bubbles under the notch for 2–4 s): an app opens or quits (with its icon), charger
+  connected, battery at 20 % and 10 %. **Do Not Disturb Bubbles** (menu, off by default) asks for the Focus
+  permission when you turn it on. macOS has no public Do Not Disturb API: the Focus permission only says
+  whether *a* Focus is on, and if macOS refuses it the app tells you and leaves the bubbles off.
+
 ## Network
 
 Only these requests leave the Mac: `lrclib.net` (title, artist, album, duration of the current track),
