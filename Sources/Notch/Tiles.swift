@@ -316,7 +316,7 @@ struct TimerTile: View {
 
     var body: some View {
         Tile(palette: palette, width: Layout.narrowTile) {
-            VStack(spacing: 10) {
+            VStack(spacing: 7) {
                 Text(timer.label)
                     .font(.system(size: 17).monospacedDigit())
                     .foregroundStyle(timer.isRunning ? palette.accent : palette.text)
@@ -327,7 +327,8 @@ struct TimerTile: View {
                     }
                 }
             }
-            .padding(.top, 4)
+            .padding(.top, 9)
+            .frame(maxHeight: .infinity, alignment: .top)
         }
     }
 

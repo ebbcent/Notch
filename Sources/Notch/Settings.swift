@@ -40,6 +40,11 @@ final class Settings: ObservableObject {
         didSet { defaults.set(spotifyCovers, forKey: "spotifyCovers") }
     }
 
+    /// Bubbles when a Focus (Do Not Disturb…) turns on or off. Off until the user turns it on.
+    @Published var focusPeeks: Bool {
+        didSet { defaults.set(focusPeeks, forKey: "focusPeeks") }
+    }
+
     var visibleTiles: [TileKind] { tileOrder.filter { !hiddenTiles.contains($0) } }
 
     func isVisible(_ tile: TileKind) -> Bool { !hiddenTiles.contains(tile) }
@@ -58,5 +63,6 @@ final class Settings: ObservableObject {
         tileOrder = stored + TileKind.allCases.filter { !stored.contains($0) }
         hiddenTiles = Set((defaults.stringArray(forKey: "hiddenTiles") ?? []).compactMap(TileKind.init(rawValue:)))
         spotifyCovers = defaults.bool(forKey: "spotifyCovers")
+        focusPeeks = defaults.bool(forKey: "focusPeeks")
     }
 }

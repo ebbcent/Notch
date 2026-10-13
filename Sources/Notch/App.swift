@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var weather: WeatherService!
     private var calendar: CalendarService!
     private var timer: FocusTimer!
+    private var peeks: PeekCenter!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -34,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         timer = FocusTimer()
         island = IslandController(settings: settings, music: music, weather: weather,
                                   calendar: calendar, timer: timer)
+        peeks = PeekCenter(model: island.model, settings: settings)
         timer.onFinish = { [weak self] in
             self?.island.model.showPeek(Peek(symbol: "timer", title: "Focus done", subtitle: "25 min"), seconds: 4)
         }
@@ -63,6 +65,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         covers.target = self
         covers.state = settings.spotifyCovers ? .on : .off
         menu.addItem(covers)
+        let focus = NSMenuItem(title: "Do Not Disturb Bubbles" + (settings.focusPeeks ? "" : FocusAccess.menuNote),
+                               action: #selector(toggleFocusPeeks), keyEquivalent: "")
+        focus.target = self
+        focus.state = settings.focusPeeks ? .on : .off
+        menu.addItem(focus)
 
         menu.addItem(.separator())
         // Temporary, to try each state by hand.
@@ -104,6 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleCovers() {
         settings.spotifyCovers.toggle()
+    }
+
+    @objc private func toggleFocusPeeks() {
+        peeks.setFocusPeeks(!settings.focusPeeks)
     }
 
     @objc private func testCompact() { island.model.compactActive.toggle() }
