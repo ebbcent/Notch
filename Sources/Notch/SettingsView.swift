@@ -178,7 +178,7 @@ private struct MusicPane: View {
     }
 
     private func statusColor(_ player: Player) -> Color {
-        switch music.permissionStatus[player].map(Int.init) {
+        switch music.permissionStatus[player].map(Int.init) ?? 1 {
         case 0: return .green
         case -1743: return .orange
         default: return .secondary
