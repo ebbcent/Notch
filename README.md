@@ -125,3 +125,7 @@ rm -rf ~/Library/Caches/local.notch.island     # cached lyrics
 
 Turn off **Launch at Login** first if you had it on (or remove Notch in System Settings › General › Login Items),
 and delete the `Notch Local` certificate in Keychain Access if you made one.
+
+## License
+
+[MIT](LICENSE)
